@@ -20,6 +20,7 @@
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
 #include <wlr/backend/libinput.h>
+#include <wlr/interfaces/wlr_keyboard.h>
 #include <wlr/render/allocator.h>
 #include <wlr/render/swapchain.h>
 #include <wlr/render/wlr_renderer.h>
@@ -1048,11 +1049,18 @@ createidleinhibitor(struct wl_listener *listener, void *data)
 void
 createkeyboard(struct wlr_keyboard *keyboard)
 {
+	xkb_mod_index_t num;
+
 	/* Set the keymap to match the group keymap */
 	wlr_keyboard_set_keymap(keyboard, kb_group->wlr_group->keyboard.keymap);
 
 	/* Add the new keyboard to the group */
 	wlr_keyboard_group_add_keyboard(kb_group->wlr_group, keyboard);
+
+	/* Lock Num_Lock on the device; the group copies its modifiers */
+	if (numlock && (num = xkb_keymap_mod_get_index(keyboard->keymap,
+			XKB_MOD_NAME_NUM)) != XKB_MOD_INVALID)
+		wlr_keyboard_notify_modifiers(keyboard, 0, 0, 1u << num, 0);
 }
 
 KeyboardGroup *
@@ -1261,10 +1269,10 @@ createpointer(struct wlr_pointer *pointer)
 			libinput_device_config_tap_set_drag_enabled(device, tap_and_drag);
 			libinput_device_config_tap_set_drag_lock_enabled(device, drag_lock);
 			libinput_device_config_tap_set_button_map(device, button_map);
+			/* Touchpads only, like mango's trackpad_natural_scrolling */
+			if (libinput_device_config_scroll_has_natural_scroll(device))
+				libinput_device_config_scroll_set_natural_scroll_enabled(device, natural_scrolling);
 		}
-
-		if (libinput_device_config_scroll_has_natural_scroll(device))
-			libinput_device_config_scroll_set_natural_scroll_enabled(device, natural_scrolling);
 
 		if (libinput_device_config_dwt_is_available(device))
 			libinput_device_config_dwt_set_enabled(device, disable_while_typing);

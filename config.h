@@ -55,11 +55,11 @@ static const MonitorRule monrules[] = {
 /* keyboard */
 static const struct xkb_rule_names xkb_rules = {
 	/* can specify fields: rules, model, layout, variant, options */
-	/* example:
-	.options = "ctrl:nocaps",
-	*/
-	.options = NULL,
+	.model = "pc105+inet",
+	.layout = "us",
+	.options = "terminate:ctrl_alt_bksp",
 };
+static const int numlock = 1; /* lock Num_Lock on every keyboard at startup */
 
 static const int repeat_rate = 25;
 static const int repeat_delay = 600;
@@ -68,7 +68,7 @@ static const int repeat_delay = 600;
 static const int tap_to_click = 1;
 static const int tap_and_drag = 1;
 static const int drag_lock = 1;
-static const int natural_scrolling = 0;
+static const int natural_scrolling = 1; /* touchpads only */
 static const int disable_while_typing = 1;
 static const int left_handed = 0;
 static const int middle_button_emulation = 0;
