@@ -1,4 +1,5 @@
 mywm
+mywm-debug
 *.o
 *-protocol.c
 *-protocol.h

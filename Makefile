@@ -17,11 +17,18 @@ DWLCFLAGS = `$(PKG_CONFIG) --cflags $(PKGS)` $(WLR_INCS) $(DWLCPPFLAGS) $(DWLDEV
 LDLIBS    = `$(PKG_CONFIG) --libs $(PKGS)` $(WLR_LIBS) -lm $(LIBS)
 
 all: mywm
-mywm: dwl.c client.h config.h ime.h util.h config.mk cursor-shape-v1-protocol.h \
+DEPS = dwl.c client.h config.h ime.h util.h config.mk cursor-shape-v1-protocol.h \
 	ext-image-copy-capture-v1-protocol.h \
 	pointer-constraints-unstable-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h \
 	wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
+mywm: $(DEPS)
 	$(CC) dwl.c $(DWLCFLAGS) $(LDFLAGS) $(LDLIBS) -o $@
+
+# ASAN/UBSAN build for crash investigation, see DESIGN.md 11.1
+DEBUGFLAGS = -O0 -fno-omit-frame-pointer -fsanitize=address,undefined
+debug: mywm-debug
+mywm-debug: $(DEPS)
+	$(CC) dwl.c $(DWLCFLAGS) $(DEBUGFLAGS) $(LDFLAGS) $(LDLIBS) -o $@
 
 # wayland-scanner is a tool which generates C headers and rigging for Wayland
 # protocols, which are specified in XML. wlroots requires you to rig these up
@@ -51,7 +58,7 @@ xdg-shell-protocol.h:
 config.h:
 	cp config.def.h $@
 clean:
-	rm -f mywm *.o *-protocol.h
+	rm -f mywm mywm-debug *.o *-protocol.h
 
 dist: clean
 	mkdir -p mywm-$(VERSION)
