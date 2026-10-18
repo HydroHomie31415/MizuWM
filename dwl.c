@@ -82,6 +82,7 @@
 #define CLEANMASK(mask)         (mask & ~WLR_MODIFIER_CAPS)
 #define VISIBLEON(C, M)         ((M) && (C)->mon == (M) && ((C)->tags & (M)->tagset[(M)->seltags]))
 #define TAGMASK                 ((1u << TAGCOUNT) - 1)
+#define LAYOUT(M)               ((M)->lt[__builtin_ctz((M)->tagset[(M)->seltags])])
 #define LISTEN(E, L, H)         wl_signal_add((E), ((L)->notify = (H), (L)))
 #define LISTEN_STATIC(E, H)     do { struct wl_listener *_l = ecalloc(1, sizeof(*_l)); _l->notify = (H); wl_signal_add((E), _l); } while (0)
 
@@ -207,9 +208,8 @@ struct Monitor {
 	struct wlr_box m; /* monitor area, layout-relative */
 	struct wlr_box w; /* window area, layout-relative */
 	struct wl_list layers[4]; /* LayerSurface.link */
-	const Layout *lt[2];
+	const Layout *lt[32]; /* per tag */
 	unsigned int seltags;
-	unsigned int sellt;
 	uint32_t tagset[2];
 	float mfact;
 	int gamma_lut_changed;
@@ -281,6 +281,7 @@ static void createnotify(struct wl_listener *listener, void *data);
 static void createpointer(struct wlr_pointer *pointer);
 static void createpointerconstraint(struct wl_listener *listener, void *data);
 static void createpopup(struct wl_listener *listener, void *data);
+static void cyclelayout(const Arg *arg);
 static void cursorconstrain(struct wlr_pointer_constraint_v1 *constraint);
 static void cursorframe(struct wl_listener *listener, void *data);
 static void cursorwarptohint(void);
@@ -554,7 +555,7 @@ arrange(Monitor *m)
 	wlr_scene_node_set_enabled(&m->fullscreen_bg->node,
 			(c = focustop(m)) && c->isfullscreen);
 
-	strncpy(m->ltsymbol, m->lt[m->sellt]->symbol, LENGTH(m->ltsymbol));
+	strncpy(m->ltsymbol, LAYOUT(m)->symbol, LENGTH(m->ltsymbol));
 
 	/* We move all clients (except fullscreen) to LyrTile while
 	 * in floating layout to avoid "real" floating clients be always on top */
@@ -563,15 +564,15 @@ arrange(Monitor *m)
 			continue;
 
 		wlr_scene_node_reparent(&c->scene->node,
-				(!m->lt[m->sellt]->arrange && c->isfloating)
+				(!LAYOUT(m)->arrange && c->isfloating)
 						? layers[LyrTile]
-						: (m->lt[m->sellt]->arrange && c->isfloating)
+						: (LAYOUT(m)->arrange && c->isfloating)
 								? layers[LyrFloat]
 								: c->scene->node.parent);
 	}
 
-	if (m->lt[m->sellt]->arrange)
-		m->lt[m->sellt]->arrange(m);
+	if (LAYOUT(m)->arrange)
+		LAYOUT(m)->arrange(m);
 	motionnotify(0, NULL, 0, 0, 0, 0);
 	checkidleinhibitor(NULL);
 }
@@ -1152,9 +1153,9 @@ createmon(struct wl_listener *listener, void *data)
 			m->m.y = r->y;
 			m->mfact = r->mfact;
 			m->nmaster = r->nmaster;
-			m->lt[0] = r->lt;
-			m->lt[1] = &layouts[LENGTH(layouts) > 1 && r->lt != &layouts[1]];
-			strncpy(m->ltsymbol, m->lt[m->sellt]->symbol, LENGTH(m->ltsymbol));
+			for (i = 0; i < LENGTH(m->lt); i++)
+				m->lt[i] = r->lt;
+			strncpy(m->ltsymbol, r->lt->symbol, LENGTH(m->ltsymbol));
 			wlr_output_state_set_scale(&state, r->scale);
 			wlr_output_state_set_transform(&state, r->rr);
 			break;
@@ -1323,6 +1324,17 @@ cursorwarptohint(void)
 		wlr_cursor_warp(cursor, NULL, sx + c->geom.x + c->bw, sy + c->geom.y + c->bw);
 		wlr_seat_pointer_warp(active_constraint->seat, sx, sy);
 	}
+}
+
+void
+cyclelayout(const Arg *arg)
+{
+	const Layout *l;
+
+	if (!selmon)
+		return;
+	for (l = layouts; l < END(layouts) && l != LAYOUT(selmon); l++);
+	setlayout(&(Arg){.v = l + 1 < END(layouts) ? l + 1 : layouts});
 }
 
 void
@@ -2584,7 +2596,7 @@ setfloating(Client *c, int floating)
 	Client *p = client_get_parent(c);
 	c->isfloating = floating;
 	/* If in floating layout do not change the client's layer */
-	if (!c->mon || !client_surface(c)->mapped || !c->mon->lt[c->mon->sellt]->arrange)
+	if (!c->mon || !client_surface(c)->mapped || !LAYOUT(c->mon)->arrange)
 		return;
 	wlr_scene_node_reparent(&c->scene->node, layers[c->isfullscreen ||
 			(p && p->isfullscreen) ? LyrFS
@@ -2619,13 +2631,10 @@ setfullscreen(Client *c, int fullscreen)
 void
 setlayout(const Arg *arg)
 {
-	if (!selmon)
+	if (!selmon || !arg || !arg->v)
 		return;
-	if (!arg || !arg->v || arg->v != selmon->lt[selmon->sellt])
-		selmon->sellt ^= 1;
-	if (arg && arg->v)
-		selmon->lt[selmon->sellt] = (Layout *)arg->v;
-	strncpy(selmon->ltsymbol, selmon->lt[selmon->sellt]->symbol, LENGTH(selmon->ltsymbol));
+	LAYOUT(selmon) = (Layout *)arg->v;
+	strncpy(selmon->ltsymbol, LAYOUT(selmon)->symbol, LENGTH(selmon->ltsymbol));
 	arrange(selmon);
 	printstatus();
 }
@@ -2636,7 +2645,7 @@ setmfact(const Arg *arg)
 {
 	float f;
 
-	if (!arg || !selmon || !selmon->lt[selmon->sellt]->arrange)
+	if (!arg || !selmon || !LAYOUT(selmon)->arrange)
 		return;
 	f = arg->f < 1.0f ? arg->f + selmon->mfact : arg->f - 1.0f;
 	if (f < 0.1 || f > 0.9)
@@ -3343,7 +3352,7 @@ zoom(const Arg *arg)
 {
 	Client *c, *sel = focustop(selmon);
 
-	if (!sel || !selmon || !selmon->lt[selmon->sellt]->arrange || sel->isfloating)
+	if (!sel || !selmon || !LAYOUT(selmon)->arrange || sel->isfloating)
 		return;
 
 	/* Search for the first tiled window that is not sel, marking sel as
