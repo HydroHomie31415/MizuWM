@@ -16,8 +16,8 @@ PKGS      = wayland-server xkbcommon libinput $(XLIBS)
 DWLCFLAGS = `$(PKG_CONFIG) --cflags $(PKGS)` $(WLR_INCS) $(DWLCPPFLAGS) $(DWLDEVCFLAGS) $(CFLAGS)
 LDLIBS    = `$(PKG_CONFIG) --libs $(PKGS)` $(WLR_LIBS) -lm $(LIBS)
 
-all: dwl
-dwl: dwl.c client.h config.h ime.h util.h config.mk cursor-shape-v1-protocol.h \
+all: mywm
+mywm: dwl.c client.h config.h ime.h util.h config.mk cursor-shape-v1-protocol.h \
 	ext-image-copy-capture-v1-protocol.h \
 	pointer-constraints-unstable-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h \
 	wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
@@ -51,27 +51,27 @@ xdg-shell-protocol.h:
 config.h:
 	cp config.def.h $@
 clean:
-	rm -f dwl *.o *-protocol.h
+	rm -f mywm *.o *-protocol.h
 
 dist: clean
-	mkdir -p dwl-$(VERSION)
+	mkdir -p mywm-$(VERSION)
 	cp -R LICENSE* Makefile CHANGELOG.md README.md client.h config.def.h \
-		config.mk protocols dwl.1 dwl.c ime.h util.h dwl.desktop \
-		dwl-$(VERSION)
-	tar -caf dwl-$(VERSION).tar.gz dwl-$(VERSION)
-	rm -rf dwl-$(VERSION)
+		config.mk protocols mywm.1 dwl.c ime.h util.h mywm.desktop \
+		mywm-$(VERSION)
+	tar -caf mywm-$(VERSION).tar.gz mywm-$(VERSION)
+	rm -rf mywm-$(VERSION)
 
-install: dwl
+install: mywm
 	mkdir -p $(DESTDIR)$(PREFIX)/bin
-	rm -f $(DESTDIR)$(PREFIX)/bin/dwl
-	cp -f dwl $(DESTDIR)$(PREFIX)/bin
-	chmod 755 $(DESTDIR)$(PREFIX)/bin/dwl
+	rm -f $(DESTDIR)$(PREFIX)/bin/mywm
+	cp -f mywm $(DESTDIR)$(PREFIX)/bin
+	chmod 755 $(DESTDIR)$(PREFIX)/bin/mywm
 	mkdir -p $(DESTDIR)$(MANDIR)/man1
-	cp -f dwl.1 $(DESTDIR)$(MANDIR)/man1
-	chmod 644 $(DESTDIR)$(MANDIR)/man1/dwl.1
+	cp -f mywm.1 $(DESTDIR)$(MANDIR)/man1
+	chmod 644 $(DESTDIR)$(MANDIR)/man1/mywm.1
 	mkdir -p $(DESTDIR)$(DATADIR)/wayland-sessions
-	cp -f dwl.desktop $(DESTDIR)$(DATADIR)/wayland-sessions/dwl.desktop
-	chmod 644 $(DESTDIR)$(DATADIR)/wayland-sessions/dwl.desktop
+	cp -f mywm.desktop $(DESTDIR)$(DATADIR)/wayland-sessions/mywm.desktop
+	chmod 644 $(DESTDIR)$(DATADIR)/wayland-sessions/mywm.desktop
 uninstall:
-	rm -f $(DESTDIR)$(PREFIX)/bin/dwl $(DESTDIR)$(MANDIR)/man1/dwl.1 \
-		$(DESTDIR)$(DATADIR)/wayland-sessions/dwl.desktop
+	rm -f $(DESTDIR)$(PREFIX)/bin/mywm $(DESTDIR)$(MANDIR)/man1/mywm.1 \
+		$(DESTDIR)$(DATADIR)/wayland-sessions/mywm.desktop

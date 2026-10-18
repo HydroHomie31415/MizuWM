@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=mywm
+Comment=Gaming-first scrolling Wayland compositor
+Exec=mywm
+Type=Application

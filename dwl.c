@@ -2861,7 +2861,7 @@ spawn(const Arg *arg)
 		dup2(STDERR_FILENO, STDOUT_FILENO);
 		setsid();
 		execvp(((char **)arg->v)[0], (char **)arg->v);
-		die("dwl: execvp %s failed:", ((char **)arg->v)[0]);
+		die("mywm: execvp %s failed:", ((char **)arg->v)[0]);
 	}
 }
 
@@ -3408,7 +3408,7 @@ main(int argc, char *argv[])
 		else if (c == 'd')
 			log_level = WLR_DEBUG;
 		else if (c == 'v')
-			die("dwl " VERSION);
+			die("mywm " VERSION);
 		else
 			goto usage;
 	}
