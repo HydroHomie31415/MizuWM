@@ -661,6 +661,7 @@ axisnotify(struct wl_listener *listener, void *data)
 	unsigned int adir;
 	struct wlr_keyboard *keyboard;
 	uint32_t mods;
+	static uint32_t last;
 
 	wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
 
@@ -673,7 +674,12 @@ axisnotify(struct wl_listener *listener, void *data)
 		mods = keyboard ? wlr_keyboard_get_modifiers(keyboard) : 0;
 		for (a = axes; a < END(axes); a++) {
 			if (CLEANMASK(mods) == CLEANMASK(a->mod) && adir == a->dir && a->func) {
-				a->func(&a->arg);
+				/* One action per axis_timeout, however many events a
+				 * smooth or high-resolution scroll sends */
+				if (event->time_msec - last >= axis_timeout) {
+					last = event->time_msec;
+					a->func(&a->arg);
+				}
 				return;
 			}
 		}

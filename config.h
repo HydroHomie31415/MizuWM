@@ -238,6 +238,7 @@ static const Button buttons[] = {
 	{ MODKEY, BTN_RIGHT,  moveresize,     {.ui = CurResize} },
 };
 
+static const unsigned int axis_timeout = 100; /* ms between wheel bind actions */
 static const Axis axes[] = {
 	{ MODKEY|CTRLKEY,       AxisUp,    tagadj,   {.i = -1} },
 	{ MODKEY|CTRLKEY,       AxisDown,  tagadj,   {.i = +1} },
