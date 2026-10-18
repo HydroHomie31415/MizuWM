@@ -7,6 +7,7 @@
 #include <limits.h>
 #include <linux/input-event-codes.h>
 #include <math.h>
+#include <regex.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -145,12 +146,14 @@ typedef struct {
 	struct wl_listener unmap;
 	struct wl_listener destroy;
 	struct wl_listener set_title;
+	struct wl_listener set_appid;
 	struct wl_listener fullscreen;
 	struct wl_listener set_decoration_mode;
 	struct wl_listener destroy_decoration;
 	unsigned int bw;
 	uint32_t tags;
 	int isfloating, isurgent, isfullscreen, ismaximized;
+	uint32_t rulesdone; /* rules already applied, bit per rule */
 	int column, row; /* scroller position on its tag, column -1 means unplaced */
 	float proportion, cfact; /* column width share, height weight in column */
 } Client;
@@ -237,11 +240,14 @@ typedef struct {
 } PointerConstraint;
 
 typedef struct {
-	const char *id;
-	const char *title;
+	const char *id;      /* app_id regex, NULL matches anything */
+	const char *title;   /* title regex, NULL matches anything */
 	uint32_t tags;
 	int isfloating;
-	int monitor;
+	const char *monitor; /* output name, NULL for the focused one */
+	int width, height;   /* floating size, 0 keeps the client's */
+	int offx, offy;      /* floating offset from centre, percent; 100 is the edge */
+	int nofocus;         /* don't focus on map */
 } Rule;
 
 typedef struct {
@@ -330,16 +336,19 @@ static void outputmgrapplyortest(struct wlr_output_configuration_v1 *config, int
 static void outputmgrtest(struct wl_listener *listener, void *data);
 static void pointerfocus(Client *c, LayerSurface* l, struct wlr_surface *surface,
 		double sx, double sy, uint32_t time);
+static void placefloating(Client *c, struct wlr_box *ref, int w, int h, int offx, int offy);
 static void printstatus(void);
 static void powermgrsetmode(struct wl_listener *listener, void *data);
 static void quit(const Arg *arg);
 static void rendermon(struct wl_listener *listener, void *data);
+static void reapplyrules(Client *c);
 static void requestdecorationmode(struct wl_listener *listener, void *data);
 static void requeststartdrag(struct wl_listener *listener, void *data);
 static void requestmonstate(struct wl_listener *listener, void *data);
 static void resize(Client *c, struct wlr_box geo, int interact);
 static void resizewin(const Arg *arg);
 static void scroller(Monitor *m);
+static int rulematches(Client *c, const Rule *r);
 static void run(char *startup_cmd);
 static int satelliteexit(int fd, uint32_t mask, void *data);
 static int satellitespawn(void *data);
@@ -372,6 +381,7 @@ static void unlocksession(struct wl_listener *listener, void *data);
 static void unmaplayersurfacenotify(struct wl_listener *listener, void *data);
 static void unmapnotify(struct wl_listener *listener, void *data);
 static void updatemons(struct wl_listener *listener, void *data);
+static void updateappid(struct wl_listener *listener, void *data);
 static void updatetitle(struct wl_listener *listener, void *data);
 static void urgent(struct wl_listener *listener, void *data);
 static void view(const Arg *arg);
@@ -479,6 +489,9 @@ static struct wl_listener new_foreign_toplevel_capture_request = {.notify = capt
 /* configuration, allows nested code to access above variables */
 #include "config.h"
 
+_Static_assert(LENGTH(rules) <= 32, "Client.rulesdone has one bit per rule");
+static regex_t ruleregex[LENGTH(rules)][2]; /* app_id, title */
+
 /* attempt to encapsulate suck into one file */
 #include "client.h"
 
@@ -520,32 +533,39 @@ applybounds(Client *c, struct wlr_box *bbox)
 void
 applyrules(Client *c)
 {
-	/* rule matching */
-	const char *appid, *title;
 	uint32_t newtags = 0;
-	int i;
 	const Rule *r;
 	Monitor *mon = selmon, *m;
+	int w = 0, h = 0, offx = 0, offy = 0, nofocus = 0;
 
-	appid = client_get_appid(c);
-	title = client_get_title(c);
-
+	c->rulesdone = 0;
 	for (r = rules; r < END(rules); r++) {
-		if ((!r->title || strstr(title, r->title))
-				&& (!r->id || strstr(appid, r->id))) {
-			c->isfloating = r->isfloating;
-			newtags |= r->tags;
-			i = 0;
-			wl_list_for_each(m, &mons, link) {
-				if (r->monitor == i++)
-					mon = m;
-			}
-		}
+		if (!rulematches(c, r))
+			continue;
+		c->rulesdone |= 1u << (r - rules);
+		c->isfloating |= r->isfloating;
+		newtags |= r->tags;
+		wl_list_for_each(m, &mons, link)
+			if (r->monitor && !strcmp(r->monitor, m->wlr_output->name))
+				mon = m;
+		w = r->width ? r->width : w;
+		h = r->height ? r->height : h;
+		offx = r->offx ? r->offx : offx;
+		offy = r->offy ? r->offy : offy;
+		nofocus |= r->nofocus;
 	}
 
 	c->isfloating |= client_is_float_type(c);
+	/* Below everything in the focus stack, so setmon() won't focus it */
+	if (nofocus && client_surface(c)->mapped) {
+		wl_list_remove(&c->flink);
+		wl_list_insert(fstack.prev, &c->flink);
+	}
 	setmon(c, mon, newtags);
+	if (c->isfloating && c->mon)
+		placefloating(c, &c->mon->w, w, h, offx, offy);
 }
+
 
 void
 arrange(Monitor *m)
@@ -1255,6 +1275,7 @@ createnotify(struct wl_listener *listener, void *data)
 	LISTEN(&toplevel->events.request_fullscreen, &c->fullscreen, fullscreennotify);
 	LISTEN(&toplevel->events.request_maximize, &c->maximize, maximizenotify);
 	LISTEN(&toplevel->events.set_title, &c->set_title, updatetitle);
+	LISTEN(&toplevel->events.set_app_id, &c->set_appid, updateappid);
 }
 
 void
@@ -1484,6 +1505,7 @@ destroynotify(struct wl_listener *listener, void *data)
 	Client *c = wl_container_of(listener, c, destroy);
 	wl_list_remove(&c->destroy.link);
 	wl_list_remove(&c->set_title.link);
+	wl_list_remove(&c->set_appid.link);
 	wl_list_remove(&c->fullscreen.link);
 	wl_list_remove(&c->commit.link);
 	wl_list_remove(&c->map.link);
@@ -1993,6 +2015,7 @@ mapnotify(struct wl_listener *listener, void *data)
 	if ((p = client_get_parent(c))) {
 		c->isfloating = 1;
 		setmon(c, p->mon, p->tags);
+		placefloating(c, &p->geom, 0, 0, 0, 0);
 	} else {
 		applyrules(c);
 	}
@@ -2357,6 +2380,19 @@ pointerfocus(Client *c, LayerSurface *l, struct wlr_surface *surface, double sx,
 }
 
 void
+placefloating(Client *c, struct wlr_box *ref, int w, int h, int offx, int offy)
+{
+	/* Centre on ref, shifted by mango-style percent offsets */
+	struct wlr_box b = c->geom;
+
+	b.width = w ? w : b.width;
+	b.height = h ? h : b.height;
+	b.x = ref->x + (ref->width - b.width) / 2 + offx * (ref->width - b.width) / 200;
+	b.y = ref->y + (ref->height - b.height) / 2 + offy * (ref->height - b.height) / 200;
+	resize(c, b, 0);
+}
+
+void
 printstatus(void)
 {
 	Monitor *m = NULL;
@@ -2433,6 +2469,35 @@ rendermon(struct wl_listener *listener, void *data)
 	wlr_scene_output_commit(m->scene_output, NULL);
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	wlr_scene_output_send_frame_done(m->scene_output, &now);
+}
+
+void
+reapplyrules(Client *c)
+{
+	/* A title or app_id set after mapping can still match a rule, e.g.
+	 * Proton naming its game window late. Each rule applies once. */
+	const Rule *r;
+	Monitor *m;
+
+	if (!c->mon || !client_surface(c)->mapped)
+		return;
+	for (r = rules; r < END(rules); r++) {
+		if ((c->rulesdone & (1u << (r - rules))) || !rulematches(c, r))
+			continue;
+		c->rulesdone |= 1u << (r - rules);
+		wl_list_for_each(m, &mons, link)
+			if (r->monitor && !strcmp(r->monitor, m->wlr_output->name) && m != c->mon)
+				setmon(c, m, r->tags);
+		if (r->tags && c->tags != (r->tags & TAGMASK)) {
+			c->tags = r->tags & TAGMASK;
+			c->column = -1;
+			arrange(c->mon);
+		}
+		if (r->isfloating && !c->isfloating)
+			setfloating(c, 1);
+		if (c->isfloating && (r->width || r->height || r->offx || r->offy))
+			placefloating(c, &c->mon->w, r->width, r->height, r->offx, r->offy);
+	}
 }
 
 void
@@ -2558,6 +2623,14 @@ resizewin(const Arg *arg)
 		sel->cfact = hgt * (sum - sel->cfact) / (selmon->w.height - hgt);
 	}
 	arrange(selmon);
+}
+
+int
+rulematches(Client *c, const Rule *r)
+{
+	regex_t *re = ruleregex[r - rules];
+	return (!r->id || !regexec(&re[0], client_get_appid(c), 0, NULL, 0))
+			&& (!r->title || !regexec(&re[1], client_get_title(c), 0, NULL, 0));
 }
 
 void
@@ -2944,8 +3017,15 @@ void
 setup(void)
 {
 	int drm_fd, i, sig[] = {SIGCHLD, SIGINT, SIGTERM, SIGPIPE};
+	size_t r;
 	struct sigaction sa = {.sa_flags = SA_RESTART, .sa_handler = handlesig};
 	sigemptyset(&sa.sa_mask);
+
+	for (r = 0; r < LENGTH(rules); r++) {
+		if ((rules[r].id && regcomp(&ruleregex[r][0], rules[r].id, REG_EXTENDED | REG_NOSUB))
+				|| (rules[r].title && regcomp(&ruleregex[r][1], rules[r].title, REG_EXTENDED | REG_NOSUB)))
+			die("invalid regex in rules[%zu]", r);
+	}
 
 	for (i = 0; i < (int)LENGTH(sig); i++)
 		sigaction(sig[i], &sa, NULL);
@@ -3455,6 +3535,13 @@ unmapnotify(struct wl_listener *listener, void *data)
 }
 
 void
+updateappid(struct wl_listener *listener, void *data)
+{
+	Client *c = wl_container_of(listener, c, set_appid);
+	updatetitle(&c->set_title, data);
+}
+
+void
 updatemons(struct wl_listener *listener, void *data)
 {
 	/*
@@ -3578,6 +3665,7 @@ updatetitle(struct wl_listener *listener, void *data)
 		wlr_ext_foreign_toplevel_handle_v1_update_state(c->foreign_toplevel_handle,
 				&foreign_toplevel_state);
 	}
+	reapplyrules(c);
 }
 
 void

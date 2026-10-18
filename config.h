@@ -22,11 +22,15 @@ static const float fullscreen_bg[]         = {0.0f, 0.0f, 0.0f, 1.0f}; /* You ca
 /* logging */
 static int log_level = WLR_ERROR;
 
+/* Regexes (POSIX extended) on app_id and title, from mango's window rules */
 static const Rule rules[] = {
-	/* app_id             title       tags mask     isfloating   monitor */
-	{ "Gimp_EXAMPLE",     NULL,       0,            1,           -1 }, /* Start on currently visible tags floating, not tiled */
-	{ "firefox_EXAMPLE",  NULL,       1 << 8,       0,           -1 }, /* Start on ONLY tag "9" */
-    /* default/example rule: can be changed but cannot be eliminated; at least one rule must exist */
+	{ .id = "^(org\\.gnome\\.Calculator|gnome-calculator|galculator|blueman-manager|org\\.gnome\\.Nautilus|xdg-desktop-portal.*|zoom)$",
+	  .isfloating = 1 },
+	{ .id = "^(firefox|zen)$", .title = "^Picture-in-Picture$", .isfloating = 1 },
+	{ .id = "^dev\\.noctalia\\.Noctalia$", .isfloating = 1, .width = 1080, .height = 920 },
+	{ .id = "^steam$", .title = "^notificationtoasts_[0-9]+_desktop$",
+	  .isfloating = 1, .nofocus = 1, .offx = 100, .offy = 100 },
+	/* TODO phase 3: named scratchpads; phase 4: game rules (DESIGN.md 6.7, 6.8) */
 };
 
 /* layout(s) */

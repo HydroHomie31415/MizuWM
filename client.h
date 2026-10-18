@@ -98,7 +98,7 @@ client_set_bounds(Client *c, int32_t width, int32_t height)
 static inline const char *
 client_get_appid(Client *c)
 {
-	return c->surface.xdg->toplevel->app_id ? c->surface.xdg->toplevel->app_id : "broken";
+	return c->surface.xdg->toplevel->app_id ? c->surface.xdg->toplevel->app_id : "";
 }
 
 static inline void
@@ -139,7 +139,7 @@ client_has_children(Client *c)
 static inline const char *
 client_get_title(Client *c)
 {
-	return c->surface.xdg->toplevel->title ? c->surface.xdg->toplevel->title : "broken";
+	return c->surface.xdg->toplevel->title ? c->surface.xdg->toplevel->title : "";
 }
 
 static inline int
