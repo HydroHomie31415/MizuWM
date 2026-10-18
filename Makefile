@@ -12,23 +12,25 @@ DWLDEVCFLAGS = -g -Wpedantic -Wall -Wextra -Wdeclaration-after-statement \
 	-Wfloat-conversion
 
 # CFLAGS / LDFLAGS
-PKGS      = wayland-server xkbcommon libinput
+PKGS      = wayland-server wayland-client xkbcommon libinput
 DWLCFLAGS = `$(PKG_CONFIG) --cflags $(PKGS)` $(WLR_INCS) $(DWLCPPFLAGS) $(DWLDEVCFLAGS) $(CFLAGS)
 LDLIBS    = `$(PKG_CONFIG) --libs $(PKGS)` $(WLR_LIBS) -lm $(LIBS)
 
 all: mywm
-DEPS = dwl.c client.h config.h ime.h util.h config.mk cursor-shape-v1-protocol.h \
+SRC  = dwl.c nested.c keyboard-shortcuts-inhibit-unstable-v1-protocol.c
+DEPS = $(SRC) client.h config.h ime.h util.h config.mk cursor-shape-v1-protocol.h \
 	ext-image-copy-capture-v1-protocol.h \
+	keyboard-shortcuts-inhibit-unstable-v1-client-protocol.h \
 	pointer-constraints-unstable-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h \
 	wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
 mywm: $(DEPS)
-	$(CC) dwl.c $(DWLCFLAGS) $(LDFLAGS) $(LDLIBS) -o $@
+	$(CC) $(SRC) $(DWLCFLAGS) $(LDFLAGS) $(LDLIBS) -o $@
 
 # ASAN/UBSAN build for crash investigation, see DESIGN.md 11.1
 DEBUGFLAGS = -O0 -fno-omit-frame-pointer -fsanitize=address,undefined
 debug: mywm-debug
 mywm-debug: $(DEPS)
-	$(CC) dwl.c $(DWLCFLAGS) $(DEBUGFLAGS) $(LDFLAGS) $(LDLIBS) -o $@
+	$(CC) $(SRC) $(DWLCFLAGS) $(DEBUGFLAGS) $(LDFLAGS) $(LDLIBS) -o $@
 
 # wayland-scanner is a tool which generates C headers and rigging for Wayland
 # protocols, which are specified in XML. wlroots requires you to rig these up
@@ -51,17 +53,23 @@ wlr-layer-shell-unstable-v1-protocol.h:
 wlr-output-power-management-unstable-v1-protocol.h:
 	$(WAYLAND_SCANNER) server-header \
 		protocols/wlr-output-power-management-unstable-v1.xml $@
+keyboard-shortcuts-inhibit-unstable-v1-client-protocol.h:
+	$(WAYLAND_SCANNER) client-header \
+		$(WAYLAND_PROTOCOLS)/unstable/keyboard-shortcuts-inhibit/keyboard-shortcuts-inhibit-unstable-v1.xml $@
+keyboard-shortcuts-inhibit-unstable-v1-protocol.c:
+	$(WAYLAND_SCANNER) private-code \
+		$(WAYLAND_PROTOCOLS)/unstable/keyboard-shortcuts-inhibit/keyboard-shortcuts-inhibit-unstable-v1.xml $@
 xdg-shell-protocol.h:
 	$(WAYLAND_SCANNER) server-header \
 		$(WAYLAND_PROTOCOLS)/stable/xdg-shell/xdg-shell.xml $@
 
 clean:
-	rm -f mywm mywm-debug *.o *-protocol.h
+	rm -f mywm mywm-debug *.o *-protocol.h *-protocol.c
 
 dist: clean
 	mkdir -p mywm-$(VERSION)
 	cp -R LICENSE* Makefile CHANGELOG.md README.md client.h config.h \
-		config.mk protocols mywm.1 dwl.c ime.h util.h mywm.desktop \
+		config.mk protocols mywm.1 dwl.c nested.c ime.h util.h mywm.desktop \
 		mywm-$(VERSION)
 	tar -caf mywm-$(VERSION).tar.gz mywm-$(VERSION)
 	rm -rf mywm-$(VERSION)

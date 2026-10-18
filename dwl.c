@@ -260,6 +260,7 @@ typedef struct {
 } SessionLock;
 
 /* function declarations */
+void nestedinhibit(struct wlr_output *output); /* nested.c */
 static void applybounds(Client *c, struct wlr_box *bbox);
 static void applyrules(Client *c);
 static void arrange(Monitor *m);
@@ -1226,6 +1227,7 @@ createmon(struct wl_listener *listener, void *data)
 	wlr_output_state_finish(&state);
 
 	wl_list_insert(&mons, &m->link);
+	nestedinhibit(wlr_output);
 	printstatus();
 
 	/* The xdg-protocol specifies:
