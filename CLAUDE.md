@@ -19,7 +19,7 @@ Gaming-first scrolling Wayland compositor, hard fork of dwl on wlroots 0.20.
 
 ## Progress
 
-- [ ] Phase 0: Bootstrap
+- [x] Phase 0: Bootstrap
 - [ ] Phase 1: No X, satellite supervision
 - [ ] Phase 2: Scroller layout and keybinds
 - [ ] Phase 3: IPC, shell integration, real hardware
