@@ -238,11 +238,13 @@ These are set by
 Tell how to connect to
 .Nm .
 .It Ev DISPLAY
-If using
-.Nm Xwayland ,
-tell how to connect to the
-.Nm Xwayland
-server.
+If
+.Nm xwayland-satellite
+is in
+.Ev PATH ,
+tell how to connect to the X server it provides.
+.Nm
+spawns it at startup and restarts it with backoff if it exits.
 .El
 .Sh EXAMPLES
 Start

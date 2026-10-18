@@ -1,6 +1,7 @@
 /*
  * See LICENSE file for copyright and license details.
  */
+#include <errno.h>
 #include <getopt.h>
 #include <libinput.h>
 #include <limits.h>
@@ -9,6 +10,10 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/pidfd.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -298,6 +303,7 @@ static void fullscreennotify(struct wl_listener *listener, void *data);
 static void gpureset(struct wl_listener *listener, void *data);
 static void handlesig(int signo);
 static void incnmaster(const Arg *arg);
+static int inpath(const char *name);
 static void inputdevice(struct wl_listener *listener, void *data);
 static const Key *keybinding(uint32_t mods, xkb_keysym_t sym);
 static void keypress(struct wl_listener *listener, void *data);
@@ -313,6 +319,8 @@ static void motionnotify(uint32_t time, struct wlr_input_device *device, double 
 		double sy, double sx_unaccel, double sy_unaccel);
 static void motionrelative(struct wl_listener *listener, void *data);
 static void moveresize(const Arg *arg);
+static int openxdisplay(void);
+static int openxsocket(int n, int abstract);
 static void outputmgrapply(struct wl_listener *listener, void *data);
 static void outputmgrapplyortest(struct wlr_output_configuration_v1 *config, int test);
 static void outputmgrtest(struct wl_listener *listener, void *data);
@@ -327,6 +335,8 @@ static void requeststartdrag(struct wl_listener *listener, void *data);
 static void requestmonstate(struct wl_listener *listener, void *data);
 static void resize(Client *c, struct wlr_box geo, int interact);
 static void run(char *startup_cmd);
+static int satelliteexit(int fd, uint32_t mask, void *data);
+static int satellitespawn(void *data);
 static void setcursor(struct wl_listener *listener, void *data);
 static void setcursorshape(struct wl_listener *listener, void *data);
 static void setfloating(Client *c, int floating);
@@ -339,6 +349,8 @@ static void setsel(struct wl_listener *listener, void *data);
 static void setup(void);
 static void spawn(const Arg *arg);
 static void startdrag(struct wl_listener *listener, void *data);
+static void startsatellite(void);
+static void stopsatellite(void);
 static void tag(const Arg *arg);
 static void tagmon(const Arg *arg);
 static void tile(Monitor *m);
@@ -362,6 +374,11 @@ static void zoom(const Arg *arg);
 
 /* variables */
 static pid_t child_pid = -1;
+static pid_t satellite_pid = -1;
+static int satellite_pidfd = -1, satellite_backoff = 1;
+static struct timespec satellite_started;
+static struct wl_event_source *satellite_timer, *satellite_exit;
+static int xdisplay = -1, xsocks[2] = {-1, -1}; /* abstract, filesystem */
 static int locked;
 static Client *focused_client;
 static struct wl_display *dpy;
@@ -760,6 +777,7 @@ void
 cleanup(void)
 {
 	cleanuplisteners();
+	stopsatellite();
 	wl_display_destroy_clients(dpy);
 	if (child_pid > 0) {
 		kill(-child_pid, SIGTERM);
@@ -1645,6 +1663,23 @@ incnmaster(const Arg *arg)
 	arrange(selmon);
 }
 
+int
+inpath(const char *name)
+{
+	char buf[PATH_MAX], *path, *dir, *save;
+	const char *env = getenv("PATH");
+	int found = 0;
+
+	if (!env || !(path = strdup(env)))
+		return 0;
+	for (dir = strtok_r(path, ":", &save); dir && !found; dir = strtok_r(NULL, ":", &save)) {
+		snprintf(buf, sizeof(buf), "%s/%s", dir, name);
+		found = access(buf, X_OK) == 0;
+	}
+	free(path);
+	return found;
+}
+
 void
 inputdevice(struct wl_listener *listener, void *data)
 {
@@ -2075,6 +2110,63 @@ moveresize(const Arg *arg)
 	}
 }
 
+int
+openxdisplay(void)
+{
+	/* Own the X lock file and sockets ourselves, like niri, so DISPLAY is
+	 * valid before satellite is up and stays the same across restarts */
+	char lock[32], pid[12];
+	FILE *f;
+	int n, fd, p;
+
+	mkdir("/tmp/.X11-unix", 01777);
+	for (n = 0; n < 64; n++) {
+		snprintf(lock, sizeof(lock), "/tmp/.X%d-lock", n);
+		if ((fd = open(lock, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0444)) < 0) {
+			/* Reclaim lock files left behind by dead servers */
+			if (errno == EEXIST && (f = fopen(lock, "r"))) {
+				if (fscanf(f, "%d", &p) == 1 && kill(p, 0) < 0 && errno == ESRCH
+						&& unlink(lock) == 0)
+					n--;
+				fclose(f);
+			}
+			continue;
+		}
+		snprintf(pid, sizeof(pid), "%10d\n", getpid());
+		if (write(fd, pid, strlen(pid)) < 0)
+			perror("write X lock");
+		close(fd);
+		if ((xsocks[0] = openxsocket(n, 1)) >= 0 && (xsocks[1] = openxsocket(n, 0)) >= 0)
+			return n;
+		if (xsocks[0] >= 0)
+			close(xsocks[0]);
+		xsocks[0] = -1;
+		unlink(lock);
+	}
+	return -1;
+}
+
+int
+openxsocket(int n, int abstract)
+{
+	struct sockaddr_un addr = {.sun_family = AF_UNIX};
+	char *path = addr.sun_path + abstract;
+	socklen_t len;
+	int fd;
+
+	snprintf(path, sizeof(addr.sun_path) - 1, "/tmp/.X11-unix/X%d", n);
+	len = sizeof(addr.sun_family) + abstract + strlen(path);
+	if (!abstract)
+		unlink(path);
+	if ((fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0)) < 0)
+		return -1;
+	if (bind(fd, (struct sockaddr *)&addr, len) < 0 || listen(fd, 128) < 0) {
+		close(fd);
+		return -1;
+	}
+	return fd;
+}
+
 void
 outputmgrapply(struct wl_listener *listener, void *data)
 {
@@ -2349,6 +2441,9 @@ run(char *startup_cmd)
 	if (!wlr_backend_start(backend))
 		die("startup: backend_start");
 
+	/* X clients spawned from here on, startup command included, get DISPLAY */
+	startsatellite();
+
 	/* Now that the socket exists and the backend is started, run the startup command */
 	if (startup_cmd) {
 		int piperw[2];
@@ -2394,6 +2489,59 @@ run(char *startup_cmd)
 	 * loop configuration to listen to libinput events, DRM events, generate
 	 * frame events at the refresh rate, and so on. */
 	wl_display_run(dpy);
+}
+
+int
+satelliteexit(int fd, uint32_t mask, void *data)
+{
+	struct timespec now;
+
+	wl_event_source_remove(satellite_exit);
+	satellite_exit = NULL;
+	close(satellite_pidfd);
+	satellite_pidfd = -1;
+	satellite_pid = -1;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	if (now.tv_sec - satellite_started.tv_sec >= 30)
+		satellite_backoff = 1;
+	fprintf(stderr, "xwayland-satellite exited, restarting in %ds\n", satellite_backoff);
+	wl_event_source_timer_update(satellite_timer, satellite_backoff * 1000);
+	satellite_backoff = MIN(satellite_backoff * 2, 30);
+	return 0;
+}
+
+int
+satellitespawn(void *data)
+{
+	char display[16], fd0[12], fd1[12];
+
+	snprintf(display, sizeof(display), ":%d", xdisplay);
+	snprintf(fd0, sizeof(fd0), "%d", xsocks[0]);
+	snprintf(fd1, sizeof(fd1), "%d", xsocks[1]);
+	if ((satellite_pid = fork()) < 0) {
+		perror("fork xwayland-satellite");
+		wl_event_source_timer_update(satellite_timer, 1000);
+		return 0;
+	}
+	if (satellite_pid == 0) {
+		dup2(STDERR_FILENO, STDOUT_FILENO);
+		setsid();
+		fcntl(xsocks[0], F_SETFD, 0);
+		fcntl(xsocks[1], F_SETFD, 0);
+		execlp("xwayland-satellite", "xwayland-satellite", display,
+				"-listenfd", fd0, "-listenfd", fd1, NULL);
+		die("mywm: execlp xwayland-satellite failed:");
+	}
+	clock_gettime(CLOCK_MONOTONIC, &satellite_started);
+	/* The SIGCHLD handler reaps it; the pidfd only tells us it is gone */
+	if ((satellite_pidfd = pidfd_open(satellite_pid, 0)) < 0) {
+		perror("pidfd_open xwayland-satellite");
+		return 0;
+	}
+	satellite_exit = wl_event_loop_add_fd(event_loop, satellite_pidfd,
+			WL_EVENT_READABLE, satelliteexit, NULL);
+	return 0;
 }
 
 void
@@ -2784,6 +2932,48 @@ startdrag(struct wl_listener *listener, void *data)
 
 	drag->icon->data = &wlr_scene_drag_icon_create(drag_icon, drag->icon)->node;
 	LISTEN_STATIC(&drag->icon->events.destroy, destroydragicon);
+}
+
+void
+startsatellite(void)
+{
+	char display[16];
+
+	if (!inpath("xwayland-satellite")) {
+		fprintf(stderr, "xwayland-satellite not found, running without X11 support\n");
+		return;
+	}
+	if ((xdisplay = openxdisplay()) < 0) {
+		fprintf(stderr, "no free X display, running without X11 support\n");
+		return;
+	}
+	snprintf(display, sizeof(display), ":%d", xdisplay);
+	setenv("DISPLAY", display, 1);
+	satellite_timer = wl_event_loop_add_timer(event_loop, satellitespawn, NULL);
+	satellitespawn(NULL);
+}
+
+void
+stopsatellite(void)
+{
+	char path[32];
+
+	if (satellite_pid > 0)
+		kill(-satellite_pid, SIGTERM);
+	if (satellite_exit)
+		wl_event_source_remove(satellite_exit);
+	if (satellite_pidfd >= 0)
+		close(satellite_pidfd);
+	if (satellite_timer)
+		wl_event_source_remove(satellite_timer);
+	if (xdisplay < 0)
+		return;
+	close(xsocks[0]);
+	close(xsocks[1]);
+	snprintf(path, sizeof(path), "/tmp/.X11-unix/X%d", xdisplay);
+	unlink(path);
+	snprintf(path, sizeof(path), "/tmp/.X%d-lock", xdisplay);
+	unlink(path);
 }
 
 void
