@@ -18,8 +18,7 @@ Optional at runtime: xwayland-satellite.
     make            # ./mywm
     make debug      # ./mywm-debug, ASAN + UBSAN
 
-Configuration is compile-time: `config.h` is copied from `config.def.h` on first
-build.
+Configuration is compile-time, in `config.h` (tracked; edit it directly).
 
 ## Running
 

@@ -55,14 +55,12 @@ xdg-shell-protocol.h:
 	$(WAYLAND_SCANNER) server-header \
 		$(WAYLAND_PROTOCOLS)/stable/xdg-shell/xdg-shell.xml $@
 
-config.h:
-	cp config.def.h $@
 clean:
 	rm -f mywm mywm-debug *.o *-protocol.h
 
 dist: clean
 	mkdir -p mywm-$(VERSION)
-	cp -R LICENSE* Makefile CHANGELOG.md README.md client.h config.def.h \
+	cp -R LICENSE* Makefile CHANGELOG.md README.md client.h config.h \
 		config.mk protocols mywm.1 dwl.c ime.h util.h mywm.desktop \
 		mywm-$(VERSION)
 	tar -caf mywm-$(VERSION).tar.gz mywm-$(VERSION)
