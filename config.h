@@ -220,6 +220,19 @@ static const Key keys[] = {
 	CHVT(7), CHVT(8), CHVT(9), CHVT(10), CHVT(11), CHVT(12),
 };
 
+/* Also work while the screen is locked (mango's bindl) */
+static const Key lockedkeys[] = {
+	{ 0, XKB_KEY_XF86AudioRaiseVolume,  spawn, NOCTALIA("volume-up 3") },
+	{ 0, XKB_KEY_XF86AudioLowerVolume,  spawn, NOCTALIA("volume-down 3") },
+	{ 0, XKB_KEY_XF86AudioMute,         spawn, NOCTALIA("volume-mute") },
+	{ 0, XKB_KEY_XF86AudioMicMute,      spawn, NOCTALIA("mic-mute") },
+	{ 0, XKB_KEY_XF86AudioNext,         spawn, NOCTALIA("media next") },
+	{ 0, XKB_KEY_XF86AudioPrev,         spawn, NOCTALIA("media previous") },
+	{ 0, XKB_KEY_XF86AudioPlay,         spawn, NOCTALIA("media toggle") },
+	{ 0, XKB_KEY_XF86MonBrightnessUp,   spawn, NOCTALIA("brightness-up") },
+	{ 0, XKB_KEY_XF86MonBrightnessDown, spawn, NOCTALIA("brightness-down") },
+};
+
 static const Button buttons[] = {
 	{ MODKEY, BTN_LEFT,   moveresize,     {.ui = CurMove} },
 	{ MODKEY, BTN_RIGHT,  moveresize,     {.ui = CurResize} },

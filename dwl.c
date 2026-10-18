@@ -1784,7 +1784,11 @@ keybinding(uint32_t mods, xkb_keysym_t sym)
 	 * processing.
 	 */
 	const Key *k;
-	for (k = keys; k < END(keys); k++) {
+	for (k = lockedkeys; k < END(lockedkeys); k++) {
+		if (CLEANMASK(mods) == CLEANMASK(k->mod) && sym == k->keysym && k->func)
+			return k;
+	}
+	for (k = keys; !locked && k < END(keys); k++) {
 		if (CLEANMASK(mods) == CLEANMASK(k->mod) && sym == k->keysym && k->func)
 			return k;
 	}
@@ -1813,9 +1817,9 @@ keypress(struct wl_listener *listener, void *data)
 
 	wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
 
-	/* On _press_ if there is no active screen locker,
-	 * attempt to process a compositor keybinding. */
-	if (!locked && event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+	/* On _press_ attempt to process a compositor keybinding; while the
+	 * screen is locked only lockedkeys apply */
+	if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
 		for (int i = 0; i < 2; i++) {
 			const Key *key = keybinding(group->mods, group->keysyms[i]);
 			if (key) {
@@ -1867,7 +1871,7 @@ int
 keyrepeat(void *data)
 {
 	KeyboardGroup *group = data;
-	if (locked || group->wlr_group->keyboard.repeat_info.rate <= 0)
+	if (group->wlr_group->keyboard.repeat_info.rate <= 0)
 		return 0;
 
 	wl_event_source_timer_update(group->key_repeat_source,
