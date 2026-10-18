@@ -3672,10 +3672,21 @@ void
 urgent(struct wl_listener *listener, void *data)
 {
 	struct wlr_xdg_activation_v1_request_activate_event *event = data;
-	Client *c = NULL;
+	Client *c = NULL, *sel = focustop(selmon);
 	toplevel_from_wlr_surface(event->surface, &c, NULL);
-	if (!c || c == focustop(selmon))
+	if (!c || c == sel)
 		return;
+
+	/* Go to the requester, unless that takes focus from a fullscreen
+	 * window such as a game; then it is only marked urgent */
+	if (focusonactivate && c->mon && client_surface(c)->mapped
+			&& !(sel && sel->isfullscreen)) {
+		selmon = c->mon;
+		if (!VISIBLEON(c, c->mon))
+			view(&(Arg){.ui = c->tags});
+		focusclient(c, NULL, 1);
+		return;
+	}
 
 	c->isurgent = 1;
 	printstatus();
