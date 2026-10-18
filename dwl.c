@@ -69,11 +69,6 @@
 #include <wlr/util/log.h>
 #include <wlr/util/region.h>
 #include <xkbcommon/xkbcommon.h>
-#ifdef XWAYLAND
-#include <wlr/xwayland.h>
-#include <xcb/xcb.h>
-#include <xcb/xcb_icccm.h>
-#endif
 
 #include "xdg-shell-protocol.h"
 #include "util.h"
@@ -87,8 +82,8 @@
 
 /* enums */
 enum { CurNormal, CurPressed, CurMove, CurResize }; /* cursor */
-enum { XDGShell, LayerShell, X11 }; /* client types */
-enum { LyrBg, LyrBottom, LyrTile, LyrFloat, LyrTop, LyrFS, LyrUnmanaged, LyrOverlay,
+enum { XDGShell, LayerShell }; /* client types */
+enum { LyrBg, LyrBottom, LyrTile, LyrFloat, LyrTop, LyrFS, LyrOverlay,
 	LyrIMPopup, LyrBlock, NUM_LAYERS }; /* scene layers */
 enum { AxisUp, AxisRight, AxisDown, AxisLeft };
 
@@ -116,7 +111,7 @@ typedef struct {
 typedef struct Monitor Monitor;
 typedef struct {
 	/* Must keep this field first */
-	unsigned int type; /* XDGShell or X11* */
+	unsigned int type; /* XDGShell */
 
 	Monitor *mon;
 	struct wlr_scene_tree *scene;
@@ -129,7 +124,6 @@ typedef struct {
 	struct wlr_box bounds; /* only width and height are used */
 	union {
 		struct wlr_xdg_surface *xdg;
-		struct wlr_xwayland_surface *xwayland;
 	} surface;
 	struct wlr_xdg_toplevel_decoration_v1 *decoration;
 	struct wlr_ext_foreign_toplevel_handle_v1 *foreign_toplevel_handle;
@@ -137,7 +131,6 @@ typedef struct {
 	struct wlr_ext_image_capture_source_v1 *image_capture_source;
 	union {
 		struct wlr_scene_tree *image_capture_tree;
-		struct wlr_scene_surface *image_capture_scene_surface;
 	} capture;
 	struct wl_listener commit;
 	struct wl_listener map;
@@ -148,14 +141,6 @@ typedef struct {
 	struct wl_listener fullscreen;
 	struct wl_listener set_decoration_mode;
 	struct wl_listener destroy_decoration;
-#ifdef XWAYLAND
-	struct wl_listener activate;
-	struct wl_listener associate;
-	struct wl_listener dissociate;
-	struct wl_listener configure;
-	struct wl_listener set_geometry;
-	struct wl_listener set_hints;
-#endif
 	unsigned int bw;
 	uint32_t tags;
 	int isfloating, isurgent, isfullscreen;
@@ -463,20 +448,6 @@ static struct wl_listener start_drag = {.notify = startdrag};
 static struct wl_listener new_session_lock = {.notify = locksession};
 static struct wl_listener new_foreign_toplevel_capture_request = {.notify = capturerequest};
 
-#ifdef XWAYLAND
-static void activatex11(struct wl_listener *listener, void *data);
-static void associatex11(struct wl_listener *listener, void *data);
-static void configurex11(struct wl_listener *listener, void *data);
-static void createnotifyx11(struct wl_listener *listener, void *data);
-static void dissociatex11(struct wl_listener *listener, void *data);
-static void setgeometryx11(struct wl_listener *listener, void *data);
-static void sethints(struct wl_listener *listener, void *data);
-static void xwaylandready(struct wl_listener *listener, void *data);
-static struct wl_listener new_xwayland_surface = {.notify = createnotifyx11};
-static struct wl_listener xwayland_ready = {.notify = xwaylandready};
-static struct wlr_xwayland *xwayland;
-#endif
-
 /* configuration, allows nested code to access above variables */
 #include "config.h"
 
@@ -568,7 +539,7 @@ arrange(Monitor *m)
 
 	strncpy(m->ltsymbol, m->lt[m->sellt]->symbol, LENGTH(m->ltsymbol));
 
-	/* We move all clients (except fullscreen and unmanaged) to LyrTile while
+	/* We move all clients (except fullscreen) to LyrTile while
 	 * in floating layout to avoid "real" floating clients be always on top */
 	wl_list_for_each(c, &clients, link) {
 		if (c->mon != m || c->scene->node.parent == layers[LyrFS])
@@ -704,7 +675,7 @@ buttonpress(struct wl_listener *listener, void *data)
 		/* Change focus if the button was _pressed_ over a client
 		   or a layer surface with on-demand keyboard interactivity */
 		xytonode(cursor->x, cursor->y, NULL, &c, &l, NULL, NULL);
-		if (c && (!client_is_unmanaged(c) || client_wants_focus(c))) {
+		if (c) {
 			focusclient(c, NULL, 1);
 		} else if (l && l->layer_surface->current.keyboard_interactive) {
 			focusclient(NULL, l, 0);
@@ -789,10 +760,6 @@ void
 cleanup(void)
 {
 	cleanuplisteners();
-#ifdef XWAYLAND
-	wlr_xwayland_destroy(xwayland);
-	xwayland = NULL;
-#endif
 	wl_display_destroy_clients(dpy);
 	if (child_pid > 0) {
 		kill(-child_pid, SIGTERM);
@@ -875,10 +842,6 @@ cleanuplisteners(void)
 	wl_list_remove(&start_drag.link);
 	wl_list_remove(&new_session_lock.link);
 	wl_list_remove(&new_foreign_toplevel_capture_request.link);
-#ifdef XWAYLAND
-	wl_list_remove(&new_xwayland_surface.link);
-	wl_list_remove(&xwayland_ready.link);
-#endif
 }
 
 void
@@ -1441,25 +1404,13 @@ destroynotify(struct wl_listener *listener, void *data)
 	wl_list_remove(&c->destroy.link);
 	wl_list_remove(&c->set_title.link);
 	wl_list_remove(&c->fullscreen.link);
-#ifdef XWAYLAND
-	if (c->type != XDGShell) {
-		wl_list_remove(&c->activate.link);
-		wl_list_remove(&c->associate.link);
-		wl_list_remove(&c->configure.link);
-		wl_list_remove(&c->dissociate.link);
-		wl_list_remove(&c->set_geometry.link);
-		wl_list_remove(&c->set_hints.link);
-	} else
-#endif
-	{
-		wl_list_remove(&c->commit.link);
-		wl_list_remove(&c->map.link);
-		wl_list_remove(&c->unmap.link);
-		wl_list_remove(&c->maximize.link);
-		if (c->decoration) {
-			wl_list_remove(&c->set_decoration_mode.link);
-			wl_list_remove(&c->destroy_decoration.link);
-		}
+	wl_list_remove(&c->commit.link);
+	wl_list_remove(&c->map.link);
+	wl_list_remove(&c->unmap.link);
+	wl_list_remove(&c->maximize.link);
+	if (c->decoration) {
+		wl_list_remove(&c->set_decoration_mode.link);
+		wl_list_remove(&c->destroy_decoration.link);
 	}
 	free(c);
 }
@@ -1539,7 +1490,7 @@ focusclient(Client *c, LayerSurface *l, int lift)
 	}
 
 	/* Put the new client atop the focus stack and select its monitor */
-	if (c && !client_is_unmanaged(c)) {
+	if (c) {
 		wl_list_remove(&c->flink);
 		wl_list_insert(&fstack, &c->flink);
 		selmon = c->mon;
@@ -1548,7 +1499,6 @@ focusclient(Client *c, LayerSurface *l, int lift)
 		/* Don't change border color if there is an exclusive focus or we are
 		 * handling a drag operation */
 		if (!(old_l && old_l->layer_surface->current.keyboard_interactive == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE)
-				&& !(old_c && client_wants_focus(old_c))
 				&& !seat->drag)
 			client_set_border_color(c, focuscolor);
 	}
@@ -1563,7 +1513,7 @@ focusclient(Client *c, LayerSurface *l, int lift)
 			&& old_l->layer_surface->current.keyboard_interactive == ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE)
 		return;
 
-	if (focused_client && focused_client != c && !(c && client_is_unmanaged(c))) {
+	if (focused_client && focused_client != c) {
 		struct wlr_surface *s = client_surface(focused_client);
 		if (c)
 			client_set_border_color(focused_client, bordercolor);
@@ -1590,8 +1540,7 @@ focusclient(Client *c, LayerSurface *l, int lift)
 	client_activate_surface(surface, 1);
 	motionnotify(0, NULL, 0, 0, 0, 0);
 
-	if (!client_is_unmanaged(c))
-		focused_client = c;
+	focused_client = c;
 }
 
 void
@@ -1890,23 +1839,11 @@ mapnotify(struct wl_listener *listener, void *data)
 	/* Create scene tree for this client and its border */
 	c->scene = client_surface(c)->data = wlr_scene_tree_create(layers[LyrTile]);
 	/* Enabled later by a call to arrange() */
-	wlr_scene_node_set_enabled(&c->scene->node, client_is_unmanaged(c));
-	c->scene_surface = c->type == XDGShell
-			? wlr_scene_xdg_surface_create(c->scene, c->surface.xdg)
-			: wlr_scene_subsurface_tree_create(c->scene, client_surface(c));
+	wlr_scene_node_set_enabled(&c->scene->node, 0);
+	c->scene_surface = wlr_scene_xdg_surface_create(c->scene, c->surface.xdg);
 	c->scene->node.data = c->scene_surface->node.data = c;
 
 	client_get_geometry(c, &c->geom);
-
-	/* Handle unmanaged clients first so we can return prior create borders */
-	if (client_is_unmanaged(c)) {
-		/* Unmanaged clients always are floating */
-		wlr_scene_node_reparent(&c->scene->node, layers[LyrUnmanaged]);
-		wlr_scene_node_set_position(&c->scene->node, c->geom.x, c->geom.y);
-		if (client_wants_focus(c))
-			focusclient(c, NULL, 1);
-		goto unset_fullscreen;
-	}
 
 	for (i = 0; i < 4; i++) {
 		c->border[i] = wlr_scene_rect_create(c->scene, 0, 0,
@@ -1919,11 +1856,6 @@ mapnotify(struct wl_listener *listener, void *data)
 			WLR_EDGE_RIGHT);
 	c->geom.width += 2 * c->bw;
 	c->geom.height += 2 * c->bw;
-	if (client_is_x11(c)) {
-		int x = c->geom.x - (int)c->bw, y = c->geom.y - (int)c->bw;
-		c->geom.x = c->geom.x < sgeom.x ? x : MAX(x, sgeom.x);
-		c->geom.y = c->geom.y < sgeom.y ? y : MAX(y, sgeom.y);
-	}
 
 	/* Insert this client into client lists. */
 	wl_list_insert(&clients, &c->link);
@@ -1933,13 +1865,7 @@ mapnotify(struct wl_listener *listener, void *data)
 			foreign_toplevel_list, &foreign_toplevel_state);
 	c->foreign_toplevel_handle->data = c;
 	c->image_capture_scene = wlr_scene_create();
-	if (c->type == XDGShell)
-		c->capture.image_capture_tree = wlr_scene_xdg_surface_create(&c->image_capture_scene->tree, c->surface.xdg);
-#ifdef XWAYLAND
-	else
-		c->capture.image_capture_scene_surface = wlr_scene_surface_create(&c->image_capture_scene->tree, c->surface.xwayland->surface);
-#endif
-
+	c->capture.image_capture_tree = wlr_scene_xdg_surface_create(&c->image_capture_scene->tree, c->surface.xdg);
 
 	/* Set initial monitor, tags, floating status, and focus:
 	 * we always consider floating, clients that have parent and thus
@@ -1953,7 +1879,6 @@ mapnotify(struct wl_listener *listener, void *data)
 	}
 	printstatus();
 
-unset_fullscreen:
 	m = c->mon ? c->mon : xytomon(c->geom.x, c->geom.y);
 	wl_list_for_each(w, &clients, link) {
 		if (w != c && w != p && w->isfullscreen && m == w->mon && (w->tags & c->tags))
@@ -2128,7 +2053,7 @@ moveresize(const Arg *arg)
 	if (cursor_mode != CurNormal && cursor_mode != CurPressed)
 		return;
 	xytonode(cursor->x, cursor->y, NULL, &grabc, NULL, NULL, NULL);
-	if (!grabc || client_is_unmanaged(grabc) || grabc->isfullscreen)
+	if (!grabc || grabc->isfullscreen)
 		return;
 
 	/* Float the window and tell motionnotify to grab it */
@@ -2246,7 +2171,7 @@ pointerfocus(Client *c, LayerSurface *l, struct wlr_surface *surface, double sx,
 	struct timespec now;
 
 	if (surface != seat->pointer_state.focused_surface && sloppyfocus && time) {
-		if (c && (!client_is_unmanaged(c) || client_wants_focus(c))) {
+		if (c) {
 			focusclient(c, NULL, 0);
 		} else if (l && l->layer_surface->current.keyboard_interactive) {
 			focusclient(NULL, l, 0);
@@ -2834,24 +2759,9 @@ setup(void)
 	text_input_manager = wlr_text_input_manager_v3_create(dpy);
 	input_method_relay = input_method_relay_create();
 
-	/* Make sure XWayland clients don't connect to the parent X server,
-	 * e.g when running in the x11 backend or the wayland backend and the
-	 * compositor has Xwayland support */
+	/* Make sure clients don't connect to the parent X server, e.g. when
+	 * running nested in a session that has one */
 	unsetenv("DISPLAY");
-#ifdef XWAYLAND
-	/*
-	 * Initialise the XWayland X server.
-	 * It will be started when the first X client is started.
-	 */
-	if ((xwayland = wlr_xwayland_create(dpy, compositor, 1))) {
-		wl_signal_add(&xwayland->events.ready, &xwayland_ready);
-		wl_signal_add(&xwayland->events.new_surface, &new_xwayland_surface);
-
-		setenv("DISPLAY", xwayland->display_name, 1);
-	} else {
-		fprintf(stderr, "failed to setup XWayland X server, continuing without it\n");
-	}
-#endif
 }
 
 void
@@ -3008,24 +2918,14 @@ unmapnotify(struct wl_listener *listener, void *data)
 	if (c == focused_client)
 		focused_client = NULL;
 
-	if (!client_is_unmanaged(c)) {
-		wl_list_remove(&c->link);
-		setmon(c, NULL, 0);
-		wl_list_remove(&c->flink);
-	} else if (client_wants_focus(c)) {
-		focusclient(focustop(selmon), NULL, 1);
-	}
+	wl_list_remove(&c->link);
+	setmon(c, NULL, 0);
+	wl_list_remove(&c->flink);
 
 	if (c->foreign_toplevel_handle) {
 		wlr_ext_foreign_toplevel_handle_v1_destroy(c->foreign_toplevel_handle);
 		c->foreign_toplevel_handle = NULL;
 	}
-#ifdef XWAYLAND
-	if (c->type != XDGShell && c->capture.image_capture_scene_surface) {
-		wlr_scene_node_destroy(&c->capture.image_capture_scene_surface->buffer->node);
-		c->capture.image_capture_scene_surface = NULL;
-	}
-#endif
 
 	wlr_scene_node_destroy(&c->image_capture_scene->tree.node);
 	c->image_capture_scene = NULL;
@@ -3280,121 +3180,6 @@ zoom(const Arg *arg)
 	focusclient(sel, NULL, 1);
 	arrange(selmon);
 }
-
-#ifdef XWAYLAND
-void
-activatex11(struct wl_listener *listener, void *data)
-{
-	Client *c = wl_container_of(listener, c, activate);
-
-	/* Only "managed" windows can be activated */
-	if (!client_is_unmanaged(c))
-		wlr_xwayland_surface_activate(c->surface.xwayland, 1);
-}
-
-void
-associatex11(struct wl_listener *listener, void *data)
-{
-	Client *c = wl_container_of(listener, c, associate);
-
-	LISTEN(&client_surface(c)->events.map, &c->map, mapnotify);
-	LISTEN(&client_surface(c)->events.unmap, &c->unmap, unmapnotify);
-}
-
-void
-configurex11(struct wl_listener *listener, void *data)
-{
-	Client *c = wl_container_of(listener, c, configure);
-	struct wlr_xwayland_surface_configure_event *event = data;
-	if (!client_surface(c) || !client_surface(c)->mapped
-			|| client_is_unmanaged(c)) {
-		wlr_xwayland_surface_configure(c->surface.xwayland,
-				event->x, event->y, event->width, event->height);
-		return;
-	}
-	if ((c->isfloating && c != grabc) || !c->mon->lt[c->mon->sellt]->arrange) {
-		resize(c, (struct wlr_box){.x = event->x - c->bw,
-				.y = event->y - c->bw, .width = event->width + c->bw * 2,
-				.height = event->height + c->bw * 2}, 0);
-	} else {
-		arrange(c->mon);
-	}
-}
-
-void
-createnotifyx11(struct wl_listener *listener, void *data)
-{
-	struct wlr_xwayland_surface *xsurface = data;
-	Client *c;
-
-	/* Allocate a Client for this surface */
-	c = xsurface->data = ecalloc(1, sizeof(*c));
-	c->surface.xwayland = xsurface;
-	c->type = X11;
-	c->bw = client_is_unmanaged(c) ? 0 : borderpx;
-
-	/* Listen to the various events it can emit */
-	LISTEN(&xsurface->events.associate, &c->associate, associatex11);
-	LISTEN(&xsurface->events.destroy, &c->destroy, destroynotify);
-	LISTEN(&xsurface->events.dissociate, &c->dissociate, dissociatex11);
-	LISTEN(&xsurface->events.request_activate, &c->activate, activatex11);
-	LISTEN(&xsurface->events.request_configure, &c->configure, configurex11);
-	LISTEN(&xsurface->events.request_fullscreen, &c->fullscreen, fullscreennotify);
-	LISTEN(&xsurface->events.set_geometry, &c->set_geometry, setgeometryx11);
-	LISTEN(&xsurface->events.set_hints, &c->set_hints, sethints);
-	LISTEN(&xsurface->events.set_title, &c->set_title, updatetitle);
-}
-
-void
-dissociatex11(struct wl_listener *listener, void *data)
-{
-	Client *c = wl_container_of(listener, c, dissociate);
-	wl_list_remove(&c->map.link);
-	wl_list_remove(&c->unmap.link);
-}
-
-void
-setgeometryx11(struct wl_listener *listener, void *data)
-{
-	Client *c = wl_container_of(listener, c, set_geometry);
-
-	if (!client_is_unmanaged(c) || !client_surface(c)
-			|| !client_surface(c)->mapped)
-		return;
-
-	client_get_geometry(c, &c->geom);
-	wlr_scene_node_set_position(&c->scene->node, c->geom.x, c->geom.y);
-}
-
-void
-sethints(struct wl_listener *listener, void *data)
-{
-	Client *c = wl_container_of(listener, c, set_hints);
-	struct wlr_surface *surface = client_surface(c);
-	if (c == focustop(selmon) || !c->surface.xwayland->hints)
-		return;
-
-	c->isurgent = xcb_icccm_wm_hints_get_urgency(c->surface.xwayland->hints);
-	printstatus();
-
-	if (c->isurgent && surface && surface->mapped)
-		client_set_border_color(c, urgentcolor);
-}
-
-void
-xwaylandready(struct wl_listener *listener, void *data)
-{
-	struct wlr_xcursor *xcursor;
-
-	/* assign the one and only seat */
-	wlr_xwayland_set_seat(xwayland, seat);
-
-	/* Set the default XWayland cursor to match the rest of dwl. */
-	if ((xcursor = wlr_xcursor_manager_get_xcursor(cursor_mgr, "default", 1)))
-		wlr_xwayland_set_cursor(xwayland, wlr_xcursor_image_get_buffer(xcursor->images[0]),
-				xcursor->images[0]->hotspot_x, xcursor->images[0]->hotspot_y);
-}
-#endif
 
 int
 main(int argc, char *argv[])
