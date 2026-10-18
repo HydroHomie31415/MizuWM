@@ -150,6 +150,8 @@ typedef struct {
 	unsigned int bw;
 	uint32_t tags;
 	int isfloating, isurgent, isfullscreen;
+	int column, row; /* scroller position on its tag, column -1 means unplaced */
+	float proportion, cfact; /* column width share, height weight in column */
 } Client;
 
 typedef struct {
@@ -314,7 +316,6 @@ static void killclient(const Arg *arg);
 static void locksession(struct wl_listener *listener, void *data);
 static void mapnotify(struct wl_listener *listener, void *data);
 static void maximizenotify(struct wl_listener *listener, void *data);
-static void monocle(Monitor *m);
 static void motionabsolute(struct wl_listener *listener, void *data);
 static void motionnotify(uint32_t time, struct wlr_input_device *device, double sx,
 		double sy, double sx_unaccel, double sy_unaccel);
@@ -335,6 +336,7 @@ static void requestdecorationmode(struct wl_listener *listener, void *data);
 static void requeststartdrag(struct wl_listener *listener, void *data);
 static void requestmonstate(struct wl_listener *listener, void *data);
 static void resize(Client *c, struct wlr_box geo, int interact);
+static void scroller(Monitor *m);
 static void run(char *startup_cmd);
 static int satelliteexit(int fd, uint32_t mask, void *data);
 static int satellitespawn(void *data);
@@ -495,6 +497,8 @@ applybounds(Client *c, struct wlr_box *bbox)
 			c->geom.height = MIN(max.height + 2 * (int)c->bw, c->geom.height);
 	}
 
+	if (!bbox)
+		return;
 	if (c->geom.x >= bbox->x + bbox->width)
 		c->geom.x = bbox->x + bbox->width - c->geom.width;
 	if (c->geom.y >= bbox->y + bbox->height)
@@ -1216,6 +1220,9 @@ createnotify(struct wl_listener *listener, void *data)
 	c = toplevel->base->data = ecalloc(1, sizeof(*c));
 	c->surface.xdg = toplevel->base;
 	c->bw = borderpx;
+	c->column = -1;
+	c->proportion = scroller_proportion;
+	c->cfact = 1.0f;
 
 	LISTEN(&toplevel->base->surface->events.commit, &c->commit, commitnotify);
 	LISTEN(&toplevel->base->surface->events.map, &c->map, mapnotify);
@@ -1525,6 +1532,9 @@ focusclient(Client *c, LayerSurface *l, int lift)
 		wl_list_insert(&fstack, &c->flink);
 		selmon = c->mon;
 		c->isurgent = 0;
+		/* Scroll the focused column into view */
+		if (!c->isfloating && LAYOUT(c->mon)->arrange == scroller)
+			arrange(c->mon);
 
 		/* Don't change border color if there is an exclusive focus or we are
 		 * handling a drag operation */
@@ -1905,6 +1915,7 @@ mapnotify(struct wl_listener *listener, void *data)
 	c->geom.height += 2 * c->bw;
 
 	/* Insert this client into client lists. */
+	c->column = -1;
 	wl_list_insert(&clients, &c->link);
 	wl_list_insert(&fstack, &c->flink);
 
@@ -1949,24 +1960,6 @@ maximizenotify(struct wl_listener *listener, void *data)
 			&& wl_resource_get_version(c->surface.xdg->toplevel->resource)
 					< XDG_TOPLEVEL_WM_CAPABILITIES_SINCE_VERSION)
 		wlr_xdg_surface_schedule_configure(c->surface.xdg);
-}
-
-void
-monocle(Monitor *m)
-{
-	Client *c;
-	int n = 0;
-
-	wl_list_for_each(c, &clients, link) {
-		if (!VISIBLEON(c, m) || c->isfloating || c->isfullscreen)
-			continue;
-		resize(c, m->w, 0);
-		n++;
-	}
-	if (n)
-		snprintf(m->ltsymbol, LENGTH(m->ltsymbol), "[%d]", n);
-	if ((c = focustop(m)))
-		wlr_scene_node_raise_to_top(&c->scene->node);
 }
 
 void
@@ -2412,7 +2405,8 @@ void
 resize(Client *c, struct wlr_box geo, int interact)
 {
 	struct wlr_box *bbox;
-	struct wlr_box clip;
+	struct wlr_box clip, mclip, *m;
+	int i, inside;
 
 	if (!c->mon || !client_surface(c)->mapped)
 		return;
@@ -2421,7 +2415,8 @@ resize(Client *c, struct wlr_box geo, int interact)
 
 	client_set_bounds(c, geo.width, geo.height);
 	c->geom = geo;
-	applybounds(c, bbox);
+	/* Tiled positions come from the layout; scroller columns may lie off-screen */
+	applybounds(c, c->isfloating || interact ? bbox : NULL);
 
 	/* Update scene-graph, including borders */
 	wlr_scene_node_set_position(&c->scene->node, c->geom.x, c->geom.y);
@@ -2436,6 +2431,24 @@ resize(Client *c, struct wlr_box geo, int interact)
 
 	client_set_size(c, c->geom.width - 2 * c->bw, c->geom.height - 2 * c->bw);
 	client_get_clip(c, &clip);
+	if (!c->isfloating) {
+		/* Don't let a column hanging off this monitor draw on its neighbour */
+		m = &c->mon->m;
+		inside = c->geom.x >= m->x && c->geom.y >= m->y
+				&& c->geom.x + c->geom.width <= m->x + m->width
+				&& c->geom.y + c->geom.height <= m->y + m->height;
+		mclip = (struct wlr_box){
+			.x = m->x - c->geom.x - (int)c->bw + clip.x,
+			.y = m->y - c->geom.y - (int)c->bw + clip.y,
+			.width = m->width,
+			.height = m->height,
+		};
+		wlr_scene_node_set_enabled(&c->scene->node, VISIBLEON(c, c->mon)
+				&& wlr_box_intersection(&mclip, &clip, &mclip));
+		for (i = 0; i < 4; i++)
+			wlr_scene_node_set_enabled(&c->border[i]->node, inside);
+		clip = mclip;
+	}
 	wlr_scene_subsurface_tree_set_clip(&c->scene_surface->node, &clip);
 }
 
@@ -2556,6 +2569,104 @@ satellitespawn(void *data)
 	return 0;
 }
 
+static int
+cmpcolumn(const void *a, const void *b)
+{
+	const Client *x = *(Client *const *)a, *y = *(Client *const *)b;
+	return x->column != y->column ? x->column - y->column : x->row - y->row;
+}
+
+void
+scroller(Monitor *m)
+{
+	/* Columns on an infinite horizontal strip. The focused column keeps its
+	 * place on screen while fully visible, otherwise the strip scrolls just
+	 * enough to show it (DESIGN.md 6.2). */
+	Client *c, *f, *ref = NULL, *anchor, **v;
+	int i, j, k, n = 0, nu = 0, ncols, maxcol = -1, scroll, x, y, h, w;
+	int fx = 0, fw = 0, ax = 0;
+	float sum;
+
+	wl_list_for_each(c, &clients, link)
+		if (VISIBLEON(c, m) && !c->isfloating)
+			n++;
+	if (!n)
+		return;
+	v = ecalloc(n, sizeof(*v));
+	i = 0;
+	wl_list_for_each(c, &clients, link)
+		if (VISIBLEON(c, m) && !c->isfloating)
+			v[i++] = c;
+
+	/* New windows open to the right of the last focused placed column */
+	wl_list_for_each(c, &fstack, flink) {
+		if (VISIBLEON(c, m) && !c->isfloating && c->column >= 0) {
+			ref = c;
+			break;
+		}
+	}
+	f = focustop(m);
+	anchor = f && !f->isfloating && f->column >= 0 ? f : ref;
+	for (i = 0; i < n; i++) {
+		nu += v[i]->column < 0;
+		maxcol = MAX(maxcol, v[i]->column);
+	}
+	for (i = 0, k = 0; nu && i < n; i++) {
+		if (v[i]->column < 0) {
+			v[i]->column = (ref ? ref->column : maxcol) + 1 + k++;
+			v[i]->row = 0;
+		} else if (ref && v[i]->column > ref->column) {
+			v[i]->column += nu;
+		}
+	}
+
+	/* Renumber columns and rows from 0; a column takes its head's width */
+	qsort(v, n, sizeof(*v), cmpcolumn);
+	for (i = 0, ncols = 0; i < n; ncols++) {
+		for (j = i; j < n && v[j]->column == v[i]->column; j++) {
+			v[j]->proportion = v[i]->proportion;
+			v[j]->row = j - i;
+		}
+		for (k = i; k < j; k++)
+			v[k]->column = ncols;
+		i = j;
+	}
+
+	/* Strip x of the anchor and the focused column, then the scroll offset */
+	if (!f || f->isfloating || !VISIBLEON(f, m))
+		f = anchor;
+	for (i = 0, x = 0; i < n; i++) {
+		if (v[i]->row)
+			continue;
+		w = ncols == 1 ? m->w.width : (int)roundf(v[i]->proportion * m->w.width);
+		if (anchor && v[i]->column == anchor->column)
+			ax = x;
+		if (f && v[i]->column == f->column) {
+			fx = x;
+			fw = w;
+		}
+		x += w;
+	}
+	scroll = anchor ? ax - (anchor->geom.x - m->w.x) : 0;
+	if (fx < scroll)
+		scroll = fx;
+	else if (fx + fw > scroll + m->w.width)
+		scroll = fx + fw - m->w.width;
+
+	for (i = 0, x = m->w.x - scroll; i < n; i = j, x += w) {
+		w = ncols == 1 ? m->w.width : (int)roundf(v[i]->proportion * m->w.width);
+		for (j = i, sum = 0; j < n && v[j]->column == v[i]->column; j++)
+			sum += v[j]->cfact;
+		for (k = i, y = m->w.y; k < j; k++, y += h) {
+			h = k == j - 1 ? m->w.y + m->w.height - y
+					: (int)roundf(m->w.height * v[k]->cfact / sum);
+			if (!v[k]->isfullscreen)
+				resize(v[k], (struct wlr_box){.x = x, .y = y, .width = w, .height = h}, 0);
+		}
+	}
+	free(v);
+}
+
 void
 setcursor(struct wl_listener *listener, void *data)
 {
@@ -2595,6 +2706,7 @@ setfloating(Client *c, int floating)
 {
 	Client *p = client_get_parent(c);
 	c->isfloating = floating;
+	c->column = -1;
 	/* If in floating layout do not change the client's layer */
 	if (!c->mon || !client_surface(c)->mapped || !LAYOUT(c->mon)->arrange)
 		return;
@@ -2663,6 +2775,7 @@ setmon(Client *c, Monitor *m, uint32_t newtags)
 		return;
 	c->mon = m;
 	c->prev = c->geom;
+	c->column = -1;
 
 	/* Scene graph sends surface leave/enter events on move and resize */
 	if (oldmon)
@@ -2993,6 +3106,7 @@ tag(const Arg *arg)
 		return;
 
 	sel->tags = arg->ui & TAGMASK;
+	sel->column = -1;
 	focusclient(focustop(selmon), NULL, 1);
 	arrange(selmon);
 	printstatus();
@@ -3066,6 +3180,7 @@ toggletag(const Arg *arg)
 		return;
 
 	sel->tags = newtags;
+	sel->column = -1;
 	focusclient(focustop(selmon), NULL, 1);
 	arrange(selmon);
 	printstatus();
