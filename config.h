@@ -5,6 +5,7 @@
                         (hex & 0xFF) / 255.0f }
 /* appearance */
 static const int sloppyfocus               = 1;  /* focus follows mouse */
+static const int warpcursor                = 1;  /* keyboard focus changes move the cursor */
 static const int bypass_surface_visibility = 0;  /* 1 means idle inhibitors will disable idle tracking even if it's surface isn't visible  */
 static const unsigned int borderpx         = 1;  /* border pixel of windows */
 static const unsigned int snap             = 32; /* snap pixel */
@@ -37,6 +38,7 @@ static const Layout layouts[] = {
 
 /* scroller */
 static const float scroller_proportion = 0.5f; /* width of new columns */
+static const float scroller_presets[] = { 1.0f, 0.5f }; /* cyclewidth steps */
 
 /* monitors */
 /* (x=-1, y=-1) is reserved as an "autoconfigure" monitor position indicator
@@ -105,77 +107,135 @@ LIBINPUT_CONFIG_TAP_MAP_LMR -- 1/2/3 finger tap maps to left/middle/right
 */
 static const enum libinput_config_tap_button_map button_map = LIBINPUT_CONFIG_TAP_MAP_LRM;
 
-/* If you want to use the windows key for MODKEY, use WLR_MODIFIER_LOGO */
-#define MODKEY WLR_MODIFIER_ALT
+/* Bindings follow ~/.config/mango/config.conf (DESIGN.md 10) */
+#define MODKEY WLR_MODIFIER_LOGO
+#define SHIFTKEY WLR_MODIFIER_SHIFT
+#define CTRLKEY  WLR_MODIFIER_CTRL
+#define ALTKEY   WLR_MODIFIER_ALT
 
 #define TAGKEYS(KEY,TAG) \
-	{ MODKEY,                    KEY,            view,            {.ui = 1 << TAG} }, \
-	{ MODKEY|WLR_MODIFIER_CTRL,  KEY,            toggleview,      {.ui = 1 << TAG} }, \
-	{ MODKEY|WLR_MODIFIER_SHIFT, KEY,            tag,             {.ui = 1 << TAG} }, \
-	{ MODKEY|WLR_MODIFIER_CTRL|WLR_MODIFIER_SHIFT,KEY,toggletag,  {.ui = 1 << TAG} }
+	{ MODKEY,       KEY, view, {.ui = 1 << TAG} }, \
+	{ MODKEY|SHIFTKEY, KEY, tag,  {.ui = 1 << TAG} }
 
 /* helper for spawning shell commands in the pre dwm-5.0 fashion */
 #define SHCMD(cmd) { .v = (const char*[]){ "/bin/sh", "-c", cmd, NULL } }
-
-/* commands */
-static const char *termcmd[] = { "foot", NULL };
-static const char *menucmd[] = { "wmenu-run", NULL };
+#define NOCTALIA(args) SHCMD("noctalia msg " args)
+#define BIN(cmd) SHCMD("$HOME/.local/bin/" cmd)
 
 static const Key keys[] = {
-	/* modifier                  key                  function          argument */
-	{ MODKEY,                    XKB_KEY_p,           spawn,            {.v = menucmd} },
-	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_Return,      spawn,            {.v = termcmd} },
-	{ MODKEY,                    XKB_KEY_j,           focusstack,       {.i = +1} },
-	{ MODKEY,                    XKB_KEY_k,           focusstack,       {.i = -1} },
-	{ MODKEY,                    XKB_KEY_i,           incnmaster,       {.i = +1} },
-	{ MODKEY,                    XKB_KEY_d,           incnmaster,       {.i = -1} },
-	{ MODKEY,                    XKB_KEY_h,           setmfact,         {.f = -0.05f} },
-	{ MODKEY,                    XKB_KEY_l,           setmfact,         {.f = +0.05f} },
-	{ MODKEY,                    XKB_KEY_Return,      zoom,             {0} },
-	{ MODKEY,                    XKB_KEY_Tab,         view,             {0} },
-	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_c,           killclient,       {0} },
-	{ MODKEY,                    XKB_KEY_t,           setlayout,        {.v = &layouts[1]} },
-	{ MODKEY,                    XKB_KEY_f,           setlayout,        {.v = &layouts[0]} },
-	{ MODKEY,                    XKB_KEY_space,       cyclelayout,      {0} },
-	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_space,       togglefloating,   {0} },
-	{ MODKEY,                    XKB_KEY_e,           togglefullscreen, {0} },
-	{ MODKEY,                    XKB_KEY_0,           view,             {.ui = ~0} },
-	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_0,           tag,              {.ui = ~0} },
-	{ MODKEY,                    XKB_KEY_comma,       focusmon,         {.i = WLR_DIRECTION_LEFT} },
-	{ MODKEY,                    XKB_KEY_period,      focusmon,         {.i = WLR_DIRECTION_RIGHT} },
-	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_comma,       tagmon,           {.i = WLR_DIRECTION_LEFT} },
-	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_period,      tagmon,           {.i = WLR_DIRECTION_RIGHT} },
-	TAGKEYS(                     XKB_KEY_1,           0),
-	TAGKEYS(                     XKB_KEY_2,           1),
-	TAGKEYS(                     XKB_KEY_3,           2),
-	TAGKEYS(                     XKB_KEY_4,           3),
-	TAGKEYS(                     XKB_KEY_5,           4),
-	TAGKEYS(                     XKB_KEY_6,           5),
-	TAGKEYS(                     XKB_KEY_7,           6),
-	TAGKEYS(                     XKB_KEY_8,           7),
-	TAGKEYS(                     XKB_KEY_9,           8),
-	{ MODKEY|WLR_MODIFIER_SHIFT, XKB_KEY_q,           quit,             {0} },
+	/* modifier            key                   function              argument */
+	{ MODKEY,              XKB_KEY_g,            spawn,                BIN("game-session") },
+	{ MODKEY|SHIFTKEY,     XKB_KEY_g,            spawn,                BIN("game-session --single-monitor") },
+	{ MODKEY,              XKB_KEY_space,        spawn,                NOCTALIA("panel-toggle launcher") },
+	{ MODKEY,              XKB_KEY_s,            spawn,                NOCTALIA("panel-toggle control-center") },
+	/* TODO phase 3: Super+N, Super+\ and Super+C toggle built-in scratchpads (DESIGN.md 6.6) */
+	{ MODKEY,              XKB_KEY_v,            spawn,                NOCTALIA("panel-toggle clipboard") },
+	{ MODKEY,              XKB_KEY_y,            spawn,                NOCTALIA("panel-toggle wallpaper") },
+	{ MODKEY,              XKB_KEY_comma,        spawn,                NOCTALIA("settings-toggle") },
+	{ MODKEY,              XKB_KEY_x,            spawn,                NOCTALIA("panel-toggle session") },
+	{ MODKEY|ALTKEY,       XKB_KEY_l,            spawn,                NOCTALIA("session lock") },
+	{ MODKEY,              XKB_KEY_r,            spawn,                NOCTALIA("screenshot-region") },
+	TAGKEYS(              XKB_KEY_1,           0),
+	TAGKEYS(              XKB_KEY_2,           1),
+	TAGKEYS(              XKB_KEY_3,           2),
+	TAGKEYS(              XKB_KEY_4,           3),
+	TAGKEYS(              XKB_KEY_5,           4),
+	TAGKEYS(              XKB_KEY_6,           5),
+	TAGKEYS(              XKB_KEY_7,           6),
+	TAGKEYS(              XKB_KEY_8,           7),
+	TAGKEYS(              XKB_KEY_9,           8),
+	{ MODKEY,              XKB_KEY_i,            viewadj,              {.i = -1} },
+	{ MODKEY,              XKB_KEY_u,            viewadj,              {.i = +1} },
+	{ MODKEY,              XKB_KEY_Page_Up,      viewadj,              {.i = -1} },
+	{ MODKEY,              XKB_KEY_Page_Down,    viewadj,              {.i = +1} },
+	{ MODKEY|CTRLKEY,      XKB_KEY_i,            tagadj,               {.i = -1} },
+	{ MODKEY|CTRLKEY,      XKB_KEY_u,            tagadj,               {.i = +1} },
+	{ MODKEY|CTRLKEY,      XKB_KEY_Up,           tagadj,               {.i = -1} },
+	{ MODKEY|CTRLKEY,      XKB_KEY_Down,         tagadj,               {.i = +1} },
+	{ MODKEY|CTRLKEY,      XKB_KEY_k,            tagadj,               {.i = -1} },
+	{ MODKEY|CTRLKEY,      XKB_KEY_j,            tagadj,               {.i = +1} },
+	{ MODKEY,              XKB_KEY_h,            focusdir,             {.i = WLR_DIRECTION_LEFT} },
+	{ MODKEY,              XKB_KEY_l,            focusdir,             {.i = WLR_DIRECTION_RIGHT} },
+	{ MODKEY,              XKB_KEY_j,            focusdir,             {.i = WLR_DIRECTION_DOWN} },
+	{ MODKEY,              XKB_KEY_k,            focusdir,             {.i = WLR_DIRECTION_UP} },
+	{ MODKEY,              XKB_KEY_Left,         focusdir,             {.i = WLR_DIRECTION_LEFT} },
+	{ MODKEY,              XKB_KEY_Right,        focusdir,             {.i = WLR_DIRECTION_RIGHT} },
+	{ MODKEY,              XKB_KEY_Down,         focusdir,             {.i = WLR_DIRECTION_DOWN} },
+	{ MODKEY,              XKB_KEY_Up,           focusdir,             {.i = WLR_DIRECTION_UP} },
+	{ MODKEY|SHIFTKEY,     XKB_KEY_h,            swapdir,              {.i = WLR_DIRECTION_LEFT} },
+	{ MODKEY|SHIFTKEY,     XKB_KEY_l,            swapdir,              {.i = WLR_DIRECTION_RIGHT} },
+	{ MODKEY|SHIFTKEY,     XKB_KEY_j,            swapdir,              {.i = WLR_DIRECTION_DOWN} },
+	{ MODKEY|SHIFTKEY,     XKB_KEY_k,            swapdir,              {.i = WLR_DIRECTION_UP} },
+	{ MODKEY|SHIFTKEY,     XKB_KEY_Left,         swapdir,              {.i = WLR_DIRECTION_LEFT} },
+	{ MODKEY|SHIFTKEY,     XKB_KEY_Right,        swapdir,              {.i = WLR_DIRECTION_RIGHT} },
+	{ MODKEY|SHIFTKEY,     XKB_KEY_Down,         swapdir,              {.i = WLR_DIRECTION_DOWN} },
+	{ MODKEY|SHIFTKEY,     XKB_KEY_Up,           swapdir,              {.i = WLR_DIRECTION_UP} },
+	{ MODKEY,              XKB_KEY_bracketleft,  stackinto,            {.i = WLR_DIRECTION_LEFT} },
+	{ MODKEY,              XKB_KEY_period,       stackinto,            {.i = WLR_DIRECTION_RIGHT} },
+	{ MODKEY,             XKB_KEY_bracketright,spawn,                BIN("niri-record-window") },
+	{ MODKEY,              XKB_KEY_f,            cyclewidth,           {0} },
+	{ MODKEY|SHIFTKEY,     XKB_KEY_f,            togglefullscreen,     {0} },
+	{ MODKEY|CTRLKEY,      XKB_KEY_f,            togglemaximizescreen, {0} },
+	{ MODKEY,              XKB_KEY_equal,        resizewin,            {.v = (const int[]){ +256, 0 }} },
+	{ MODKEY,              XKB_KEY_minus,        resizewin,            {.v = (const int[]){ -256, 0 }} },
+	{ MODKEY|SHIFTKEY,     XKB_KEY_equal,        resizewin,            {.v = (const int[]){ 0, +144 }} },
+	{ MODKEY|SHIFTKEY,     XKB_KEY_minus,        resizewin,            {.v = (const int[]){ 0, -144 }} },
+	{ MODKEY|SHIFTKEY,     XKB_KEY_r,            spawn,                BIN("mango-screenshot save") },
+	{ MODKEY|SHIFTKEY,     XKB_KEY_t,            togglefloating,       {0} },
+	{ MODKEY,              XKB_KEY_apostrophe,   cyclelayout,          {0} },
+	{ MODKEY,              XKB_KEY_q,            killclient,           {0} },
+	{ MODKEY|CTRLKEY,      XKB_KEY_h,            focusmon,             {.i = WLR_DIRECTION_LEFT} },
+	{ MODKEY|CTRLKEY,      XKB_KEY_l,            focusmon,             {.i = WLR_DIRECTION_RIGHT} },
+	{ MODKEY|CTRLKEY,      XKB_KEY_Left,         focusmon,             {.i = WLR_DIRECTION_LEFT} },
+	{ MODKEY|CTRLKEY,      XKB_KEY_Right,        focusmon,             {.i = WLR_DIRECTION_RIGHT} },
+	{ MODKEY|SHIFTKEY|CTRLKEY, XKB_KEY_h,            tagmon,               {.i = WLR_DIRECTION_LEFT} },
+	{ MODKEY|SHIFTKEY|CTRLKEY, XKB_KEY_l,            tagmon,               {.i = WLR_DIRECTION_RIGHT} },
+	{ MODKEY|SHIFTKEY|CTRLKEY, XKB_KEY_j,            tagmon,               {.i = WLR_DIRECTION_DOWN} },
+	{ MODKEY|SHIFTKEY|CTRLKEY, XKB_KEY_k,            tagmon,               {.i = WLR_DIRECTION_UP} },
+	{ MODKEY|SHIFTKEY|CTRLKEY, XKB_KEY_Left,         tagmon,               {.i = WLR_DIRECTION_LEFT} },
+	{ MODKEY|SHIFTKEY|CTRLKEY, XKB_KEY_Right,        tagmon,               {.i = WLR_DIRECTION_RIGHT} },
+	{ MODKEY|SHIFTKEY|CTRLKEY, XKB_KEY_Up,           tagmon,               {.i = WLR_DIRECTION_UP} },
+	{ MODKEY|SHIFTKEY|CTRLKEY, XKB_KEY_Down,         tagmon,               {.i = WLR_DIRECTION_DOWN} },
+	{ MODKEY|SHIFTKEY,     XKB_KEY_p,            spawn,                NOCTALIA("dpms-off") },
+	{ 0,                   XKB_KEY_Print,        spawn,                NOCTALIA("screenshot-region") },
+	{ CTRLKEY,             XKB_KEY_Print,        spawn,                BIN("mango-screenshot output") },
+	{ ALTKEY,              XKB_KEY_Print,        spawn,                BIN("mango-screenshot window") },
+	{ 0,                   XKB_KEY_XF86Launch1,  spawn,                NOCTALIA("screenshot-region") },
+	{ CTRLKEY,             XKB_KEY_XF86Launch1,  spawn,                BIN("mango-screenshot output") },
+	{ ALTKEY,              XKB_KEY_XF86Launch1,  spawn,                BIN("mango-screenshot window") },
+	{ MODKEY,              XKB_KEY_t,            spawn,                SHCMD("alacritty") },
+	{ MODKEY,              XKB_KEY_b,            spawn,                SHCMD("helium-browser") },
+	{ MODKEY,              XKB_KEY_d,            spawn,                SHCMD("equibop") },
+	{ MODKEY,              XKB_KEY_e,            spawn,                SHCMD("kumo-files") },
+	/* TODO phase 5: Super+Tab overview, Alt+Tab / Alt+Shift+Tab switcher */
+	{ MODKEY|SHIFTKEY,     XKB_KEY_e,            quit,                 {0} },
 
 	/* Ctrl-Alt-Backspace and Ctrl-Alt-Fx used to be handled by X server */
-	{ WLR_MODIFIER_CTRL|WLR_MODIFIER_ALT,XKB_KEY_BackSpace, quit, {0} },
+	{ CTRLKEY|ALTKEY,      XKB_KEY_BackSpace,    quit,                 {0} },
 	/* Ctrl-Alt-Fx is used to switch to another VT, if you don't know what a VT is
 	 * do not remove them.
 	 */
-#define CHVT(n) { WLR_MODIFIER_CTRL|WLR_MODIFIER_ALT,XKB_KEY_F##n, chvt, {.ui = (n)} }
+#define CHVT(n) { CTRLKEY|ALTKEY, XKB_KEY_F##n, chvt, {.ui = (n)} }
 	CHVT(1), CHVT(2), CHVT(3), CHVT(4), CHVT(5), CHVT(6),
 	CHVT(7), CHVT(8), CHVT(9), CHVT(10), CHVT(11), CHVT(12),
 };
 
 static const Button buttons[] = {
 	{ MODKEY, BTN_LEFT,   moveresize,     {.ui = CurMove} },
-	{ MODKEY, BTN_MIDDLE, togglefloating, {0} },
 	{ MODKEY, BTN_RIGHT,  moveresize,     {.ui = CurResize} },
 };
 
 static const Axis axes[] = {
-	/* example of volume control:
-	{ MODKEY, AxisUp,   spawn, SHCMD("volume-up_EXAMPLE") },
-	{ MODKEY, AxisDown, spawn, SHCMD("volume-down_EXAMPLE") }, */
-	{ 0, 0, NULL, {0} },
-	/* does nothing, but the array cannot be empty */
+	{ MODKEY|CTRLKEY,       AxisUp,    tagadj,   {.i = -1} },
+	{ MODKEY|CTRLKEY,       AxisDown,  tagadj,   {.i = +1} },
+	{ MODKEY|SHIFTKEY,      AxisUp,    viewadj,  {.i = -1} },
+	{ MODKEY|SHIFTKEY,      AxisDown,  viewadj,  {.i = +1} },
+	{ MODKEY,            AxisLeft,  focusdir, {.i = WLR_DIRECTION_LEFT} },
+	{ MODKEY,            AxisRight, focusdir, {.i = WLR_DIRECTION_RIGHT} },
+	{ MODKEY,            AxisUp,    focusdir, {.i = WLR_DIRECTION_LEFT} },
+	{ MODKEY,            AxisDown,  focusdir, {.i = WLR_DIRECTION_RIGHT} },
+	{ MODKEY|CTRLKEY,       AxisLeft,  swapdir,  {.i = WLR_DIRECTION_LEFT} },
+	{ MODKEY|CTRLKEY,       AxisRight, swapdir,  {.i = WLR_DIRECTION_RIGHT} },
+	{ MODKEY|CTRLKEY|SHIFTKEY, AxisUp,    swapdir,  {.i = WLR_DIRECTION_LEFT} },
+	{ MODKEY|CTRLKEY|SHIFTKEY, AxisDown,  swapdir,  {.i = WLR_DIRECTION_RIGHT} },
 };

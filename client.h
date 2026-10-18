@@ -227,6 +227,12 @@ client_set_fullscreen(Client *c, int fullscreen)
 }
 
 static inline void
+client_set_maximized(Client *c, int maximized)
+{
+	wlr_xdg_toplevel_set_maximized(c->surface.xdg->toplevel, maximized);
+}
+
+static inline void
 client_set_scale(struct wlr_surface *s, float scale)
 {
 	wlr_fractional_scale_v1_notify_scale(s, scale);
