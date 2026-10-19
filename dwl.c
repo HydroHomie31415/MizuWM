@@ -354,6 +354,7 @@ static void resizetiled(int dx, int dy);
 static int rowedge(Client *c, int dy, int upper);
 static void resizewin(const Arg *arg);
 static void scroller(Monitor *m);
+static int cmpcolumn(const void *a, const void *b);
 static int rulematches(Client *c, const Rule *r);
 static void run(char *startup_cmd);
 static int satelliteexit(int fd, uint32_t mask, void *data);
@@ -3143,8 +3144,28 @@ setfullscreen(Client *c, int fullscreen)
 void
 setlayout(const Arg *arg)
 {
+	Client *c, **v;
+	int i, n = 0;
+
 	if (!selmon || !arg || !arg->v)
 		return;
+	/* Leaving the scroller: put the client list in strip order, so tile
+	 * shows the windows in the same order, like mango's single list */
+	if (LAYOUT(selmon)->arrange == scroller) {
+		wl_list_for_each(c, &clients, link)
+			n += VISIBLEON(c, selmon) && !c->isfloating && c->column >= 0;
+		v = ecalloc(n ? n : 1, sizeof(*v));
+		i = 0;
+		wl_list_for_each(c, &clients, link)
+			if (VISIBLEON(c, selmon) && !c->isfloating && c->column >= 0)
+				v[i++] = c;
+		qsort(v, n, sizeof(*v), cmpcolumn);
+		for (i = n - 1; i >= 0; i--) {
+			wl_list_remove(&v[i]->link);
+			wl_list_insert(&clients, &v[i]->link);
+		}
+		free(v);
+	}
 	LAYOUT(selmon) = (Layout *)arg->v;
 	strncpy(selmon->ltsymbol, LAYOUT(selmon)->symbol, LENGTH(selmon->ltsymbol));
 	arrange(selmon);
