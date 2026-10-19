@@ -3562,9 +3562,10 @@ stopsatellite(void)
 void
 swapclients(Client *a, Client *b)
 {
-	/* Exchange list positions, scroller slots and geometry */
+	/* Exchange list positions and scroller slots. Geometry stays, so the
+	 * scroller keeps the focused window in place and moves the strip
+	 * around it, as mango does. */
 	struct wl_list *pa = a->link.prev;
-	struct wlr_box g = a->geom;
 	int col = a->column, row = a->row;
 
 	if (pa == &b->link) {
@@ -3580,8 +3581,6 @@ swapclients(Client *a, Client *b)
 	a->row = b->row;
 	b->column = col;
 	b->row = row;
-	a->geom = b->geom;
-	b->geom = g;
 }
 
 void
