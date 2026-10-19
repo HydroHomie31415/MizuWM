@@ -832,8 +832,10 @@ arrange(Monitor *m)
 {
 	Client *c, *p;
 
-	if (!m->wlr_output->enabled)
+	if (!m->wlr_output->enabled) {
+		checkidleinhibitor(NULL); /* a game may have left a dpms-off output */
 		return;
+	}
 
 	wl_list_for_each(c, &clients, link) {
 		if (c->mon == m) {
@@ -1101,6 +1103,12 @@ checkidleinhibitor(struct wlr_surface *exclude)
 {
 	int inhibited = 0, unused_lx, unused_ly;
 	struct wlr_idle_inhibitor_v1 *inhibitor;
+	Client *c;
+
+	/* Controllers don't reset the idle timer (DESIGN.md 6.8) */
+	wl_list_for_each(c, &clients, link)
+		if (c->isgame && c->isfullscreen && VISIBLEON(c, c->mon))
+			inhibited = 1;
 	wl_list_for_each(inhibitor, &idle_inhibit_mgr->inhibitors, link) {
 		struct wlr_surface *surface = wlr_surface_get_root_surface(inhibitor->surface);
 		struct wlr_scene_tree *tree = surface->data;
@@ -3530,6 +3538,7 @@ reapplyrules(Client *c)
 		if (r->isfullscreen && !c->isfullscreen)
 			setfullscreen(c, 1);
 	}
+	checkidleinhibitor(NULL); /* isgame may have changed */
 }
 
 void

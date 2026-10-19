@@ -296,7 +296,7 @@ one passes.
     a `Minecraft 1.21` title is game + fullscreen; `get clients` shows `game`.
   - [x] 4.2 Pointer confined to a focused game. *Check:* headless virtual pointer
     can't leave a focused game window; it can once focus moves.
-  - [ ] 4.3 Idle inhibited while a game is fullscreen. *Check:* an idle-notify
+  - [x] 4.3 Idle inhibited while a game is fullscreen. *Check:* an idle-notify
     client gets no idle event while a fullscreen game is mapped, and does after.
   - [ ] 4.4 tearing-control-v1: async page flips for a fullscreen game that asks.
     *Check:* headless `get outputs` reports tearing on/off as the hint and
