@@ -2428,6 +2428,7 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 	LayerSurface *l = NULL, *focusedl = NULL;
 	struct wlr_surface *surface = NULL;
 	struct wlr_pointer_constraint_v1 *constraint;
+	struct wlr_box box;
 
 	/* Find the client under the pointer and send the event along. */
 	xytonode(cursor->x, cursor->y, &surface, &c, &l, &sx, &sy);
@@ -2464,6 +2465,15 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 				if (active_constraint->type == WLR_POINTER_CONSTRAINT_V1_LOCKED)
 					return;
 			}
+		}
+
+		/* Confine the pointer to a focused game (DESIGN.md 6.8) */
+		if (focused_client && focused_client->isgame && focused_client->mon
+				&& cursor_mode != CurResize && cursor_mode != CurMove && !seat->drag
+				&& wlr_box_intersection(&box, &focused_client->geom, &focused_client->mon->m)) {
+			wlr_box_closest_point(&box, cursor->x + dx, cursor->y + dy, &sx_confined, &sy_confined);
+			dx = sx_confined - cursor->x;
+			dy = sy_confined - cursor->y;
 		}
 
 		wlr_cursor_move(cursor, device, dx, dy);

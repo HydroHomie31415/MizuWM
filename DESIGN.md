@@ -294,7 +294,7 @@ one passes.
     title arrives after mapping). *Check:* headless, a `steam_app_1` window with no
     title opens on the game output, not fullscreen; setting a title fullscreens it;
     a `Minecraft 1.21` title is game + fullscreen; `get clients` shows `game`.
-  - [ ] 4.2 Pointer confined to a focused game. *Check:* headless virtual pointer
+  - [x] 4.2 Pointer confined to a focused game. *Check:* headless virtual pointer
     can't leave a focused game window; it can once focus moves.
   - [ ] 4.3 Idle inhibited while a game is fullscreen. *Check:* an idle-notify
     client gets no idle event while a fullscreen game is mapped, and does after.
