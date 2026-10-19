@@ -1598,6 +1598,16 @@ dirclient(Client *sel, enum wlr_direction dir, int tiled)
 			bestscore = score;
 		}
 	}
+	/* Another scroller column means the window last focused in it, like
+	 * mango */
+	if (best && LAYOUT(sel->mon)->arrange == scroller && !sel->isfloating
+			&& !best->isfloating && best->column != sel->column) {
+		wl_list_for_each(c, &fstack, flink) {
+			if (VISIBLEON(c, sel->mon) && !c->isfloating && !c->isfullscreen
+					&& c->column == best->column)
+				return c;
+		}
+	}
 	return best;
 }
 
@@ -1808,20 +1818,9 @@ focusclient(Client *c, LayerSurface *l, int lift)
 void
 focusdir(const Arg *arg)
 {
-	Client *c, *t, *sel = focustop(selmon);
+	Client *c, *sel = focustop(selmon);
 	if (!sel || sel->isfullscreen || !(c = dirclient(sel, arg->i, 0)))
 		return;
-	/* Entering another scroller column focuses the window last focused
-	 * in it, like mango */
-	if (LAYOUT(selmon)->arrange == scroller && !sel->isfloating
-			&& !c->isfloating && c->column != sel->column) {
-		wl_list_for_each(t, &fstack, flink) {
-			if (VISIBLEON(t, selmon) && !t->isfloating && t->column == c->column) {
-				c = t;
-				break;
-			}
-		}
-	}
 	focusclient(c, NULL, 1);
 	warpto(&c->geom);
 }
