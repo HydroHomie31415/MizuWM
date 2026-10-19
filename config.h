@@ -20,6 +20,7 @@ static const float dropcolor[]             = COLOR(0x735a2880); /* mango's drop_
 static const float fullscreen_bg[]         = {0.0f, 0.0f, 0.0f, 1.0f}; /* You can also use glsl colors */
 /* animations in ms, mango's durations; never on game windows */
 static const int animmove                  = 250;
+static const int animtag                   = 250; /* slides vertically */
 
 /* tagging - TAGCOUNT must be no greater than 31 */
 #define TAGCOUNT (9)

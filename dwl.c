@@ -179,6 +179,7 @@ typedef struct {
 	uint32_t animstart; /* ms */
 	int animdur; /* 0 when not moving */
 	int shown; /* visible at the last arrange; only those animate */
+	int hiding; /* sliding away to another tag */
 } Client;
 
 typedef struct {
@@ -413,6 +414,7 @@ static void setpsel(struct wl_listener *listener, void *data);
 static void setsel(struct wl_listener *listener, void *data);
 static void setup(void);
 static void showscratch(Client *c);
+static void slidetags(Monitor *m, uint32_t old);
 static void spawn(const Arg *arg);
 static void startdrag(struct wl_listener *listener, void *data);
 static void stackinto(const Arg *arg);
@@ -582,6 +584,8 @@ animate(Monitor *m)
 			continue;
 		if (!animations || c->isgame || now - c->animstart >= (uint32_t)c->animdur) {
 			c->animdur = 0;
+			c->hiding = 0;
+			c->animto = c->geom;
 			done = 1;
 		}
 		busy |= c->animdur;
@@ -653,7 +657,7 @@ applygeom(Client *c, struct wlr_box b)
 		{0, (int)c->bw, (int)c->bw, b.height - 2 * (int)c->bw},
 		{b.width - (int)c->bw, (int)c->bw, (int)c->bw, b.height - 2 * (int)c->bw},
 	};
-	int i;
+	int i, visible;
 
 	wlr_scene_node_set_position(&c->scene->node, b.x, b.y);
 	wlr_scene_node_set_position(&c->scene_surface->node, c->bw, c->bw);
@@ -669,6 +673,7 @@ applygeom(Client *c, struct wlr_box b)
 	}
 
 	client_get_clip(c, &b, &clip);
+	visible = VISIBLEON(c, c->mon) || c->hiding;
 	if (!c->isfloating) {
 		mclip = (struct wlr_box){
 			.x = m->x - b.x - (int)c->bw + clip.x,
@@ -676,10 +681,10 @@ applygeom(Client *c, struct wlr_box b)
 			.width = m->width,
 			.height = m->height,
 		};
-		wlr_scene_node_set_enabled(&c->scene->node, VISIBLEON(c, c->mon)
-				&& wlr_box_intersection(&mclip, &clip, &mclip));
+		visible = visible && wlr_box_intersection(&mclip, &clip, &mclip);
 		clip = mclip;
 	}
+	wlr_scene_node_set_enabled(&c->scene->node, visible);
 	wlr_scene_subsurface_tree_set_clip(&c->scene_surface->node, &clip);
 }
 
@@ -749,7 +754,8 @@ arrange(Monitor *m)
 
 	wl_list_for_each(c, &clients, link) {
 		if (c->mon == m) {
-			wlr_scene_node_set_enabled(&c->scene->node, VISIBLEON(c, m));
+			c->hiding &= !VISIBLEON(c, m);
+			wlr_scene_node_set_enabled(&c->scene->node, VISIBLEON(c, m) || c->hiding);
 			client_set_suspended(c, !VISIBLEON(c, m)
 					&& (!c->image_capture_source
 					|| wl_list_empty(&c->image_capture_source->resources)));
@@ -3052,7 +3058,7 @@ resize(Client *c, struct wlr_box geo, int interact)
 	client_set_size(c, c->geom.width - 2 * c->bw, c->geom.height - 2 * c->bw);
 
 	now = nowms();
-	if (!wlr_box_equal(&c->geom, &c->animto)) {
+	if (!c->hiding && !wlr_box_equal(&c->geom, &c->animto)) {
 		c->animfrom = animbox(c, now);
 		c->animto = c->geom;
 		c->animstart = now;
@@ -3570,7 +3576,7 @@ setmon(Client *c, Monitor *m, uint32_t newtags)
 	c->mon = m;
 	c->prev = c->geom;
 	c->column = -1;
-	c->shown = 0; /* don't fly across monitors */
+	c->shown = c->hiding = 0; /* don't fly across monitors */
 	if (c->toplevel_handle && oldmon)
 		wlr_foreign_toplevel_handle_v1_output_leave(c->toplevel_handle, oldmon->wlr_output);
 	if (c->toplevel_handle && m)
@@ -3876,6 +3882,36 @@ showscratch(Client *c)
 	focusclient(c, NULL, 1);
 	warpto(&c->geom);
 	printstatus();
+}
+
+void
+slidetags(Monitor *m, uint32_t old)
+{
+	/* Tags are stacked vertically: the old one slides out as the new one slides in */
+	Client *c;
+	uint32_t new = m->tagset[m->seltags], now = nowms();
+	int dir = old && new && __builtin_ctz(new) < __builtin_ctz(old) ? -1 : 1;
+
+	if (!animations)
+		return;
+	wl_list_for_each(c, &clients, link) {
+		if (c->mon != m || c->isgame || !(c->tags & old) == !(c->tags & new))
+			continue;
+		if (c->tags & new) {
+			c->animfrom = c->geom;
+			c->animfrom.y += dir * m->m.height;
+			c->animto = c->geom;
+		} else {
+			c->animfrom = animbox(c, now);
+			c->animto = c->animfrom;
+			c->animto.y -= dir * m->m.height;
+		}
+		c->hiding = !(c->tags & new);
+		c->animstart = now;
+		c->animdur = animtag;
+		applygeom(c, c->animfrom);
+	}
+	wlr_output_schedule_frame(m->wlr_output);
 }
 
 void
@@ -4437,13 +4473,17 @@ updateworkspaces(void)
 void
 view(const Arg *arg)
 {
+	uint32_t old;
+
 	if (!selmon || (arg->ui & TAGMASK) == selmon->tagset[selmon->seltags])
 		return;
+	old = selmon->tagset[selmon->seltags];
 	selmon->seltags ^= 1; /* toggle sel tagset */
 	if (arg->ui & TAGMASK)
 		selmon->tagset[selmon->seltags] = arg->ui & TAGMASK;
 	focusclient(focustop(selmon), NULL, 1);
 	arrange(selmon);
+	slidetags(selmon, old);
 	printstatus();
 }
 
@@ -4530,6 +4570,7 @@ xytonode(double x, double y, struct wlr_surface **psurface,
 {
 	struct wlr_scene_node *node;
 	struct wlr_surface *surface = NULL;
+	Client *c = NULL;
 	int layer;
 
 	for (layer = NUM_LAYERS - 1; !surface && layer >= (locked ? LyrBlock : 0); layer--) {
@@ -4542,8 +4583,11 @@ xytonode(double x, double y, struct wlr_surface **psurface,
 					wlr_scene_buffer_from_node(node))->surface;
 	}
 
+	toplevel_from_wlr_surface(surface, &c, pl);
+	if (c && c->hiding) /* leaving with its tag, don't focus it */
+		c = NULL, surface = NULL;
 	if (psurface) *psurface = surface;
-	toplevel_from_wlr_surface(surface, pc, pl);
+	if (pc) *pc = c;
 }
 
 
