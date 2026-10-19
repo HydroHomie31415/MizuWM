@@ -2297,8 +2297,6 @@ mapnotify(struct wl_listener *listener, void *data)
 	wl_list_for_each(w, &clients, link) {
 		if (c->isoverlay)
 			break;
-		if (w != c && w != p && w->isfullscreen && m == w->mon && (w->tags & c->tags))
-			setfullscreen(w, 0);
 		if (w != c && w != p && w->ismaximized && m == w->mon && (w->tags & c->tags))
 			setmaximized(w, 0);
 	}
@@ -3876,17 +3874,12 @@ swapdir(const Arg *arg)
 void
 tag(const Arg *arg)
 {
-	Client *c, *sel = focustop(selmon);
+	Client *sel = focustop(selmon);
 	if (!sel || (arg->ui & TAGMASK) == 0)
 		return;
 
 	sel->tags = arg->ui & TAGMASK;
 	sel->column = -1;
-	/* Don't arrive hidden under a fullscreen window, as in mango */
-	wl_list_for_each(c, &clients, link)
-		if (c != sel && c->mon == sel->mon && (c->tags & sel->tags)
-				&& c->isfullscreen && !sel->isfloating)
-			setfullscreen(c, 0);
 	view(&(Arg){.ui = sel->tags});
 	focusclient(sel, NULL, 1);
 	arrange(selmon);
