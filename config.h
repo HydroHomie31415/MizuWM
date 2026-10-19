@@ -42,6 +42,10 @@ static const char *const autostart[] = {
 };
 
 /* Regexes (POSIX extended) on app_id and title, from mango's window rules */
+#ifndef GAMEMON
+#define GAMEMON "DP-3" /* the gaming monitor (DESIGN.md 5) */
+#endif
+#define GAMEIDS "^(steam_app_[0-9]+|valheim\\.x86_64|cs2|gamescope)$"
 static const Rule rules[] = {
 	{ .id = "^(org\\.gnome\\.Calculator|gnome-calculator|galculator|blueman-manager|org\\.gnome\\.Nautilus|xdg-desktop-portal.*|zoom)$",
 	  .isfloating = 1 },
@@ -50,7 +54,12 @@ static const Rule rules[] = {
 	{ .id = "^steam$", .title = "^notificationtoasts_[0-9]+_desktop$",
 	  .isfloating = 1, .nofocus = 1, .offx = 100, .offy = 100 },
 	{ .id = "^steam$", .nomapfs = 1 },
-	/* TODO phase 4: game rules (DESIGN.md 6.7, 6.8) */
+	/* Games (DESIGN.md 6.8). Proton maps an untitled splash first, and
+	 * fullscreening that breaks mouse capture, so wait for a title. */
+	{ .id = GAMEIDS, .isgame = 1, .monitor = GAMEMON, .nomapfs = 1 },
+	{ .id = GAMEIDS, .title = ".", .isfullscreen = 1 },
+	/* "Minecraft* 1.21.1 - Singleplayer", not a browser tab about it */
+	{ .title = "^Minecraft\\*? [0-9.]+( - .*)?$", .isgame = 1, .monitor = GAMEMON, .isfullscreen = 1 },
 };
 
 /* Named scratchpads (DESIGN.md 6.6): floating overlay windows, toggled by

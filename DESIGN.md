@@ -164,8 +164,8 @@ change until the window has been placed.
 | app_id `steam`, title `notificationtoasts_[0-9]+_desktop` | floating, don't focus, offset 100,100 |
 | app_id `steam` | ignore fullscreen at map: satellite fullscreens X windows that map at an output's size, and Steam reopens at the size it was tiled to |
 | app_id `steam_app_[0-9]+`, `valheim.x86_64`, `cs2`, `gamescope` | **game** (6.8) |
-| title `Minecraft\*? .*` | **game** + fullscreen |
-| game app_ids above **with a non-empty title** | fullscreen |
+| title `Minecraft\*? [0-9.]+( - .*)?` (mango has `Minecraft\*? .*`, which also catches browser tabs) | **game** + fullscreen |
+| game app_ids above **with a non-empty title** | fullscreen; untitled ones ignore fullscreen at map |
 
 The "non-empty title" rule matters: Proton opens an untitled splash window first,
 and fullscreening it breaks mouse capture.
@@ -288,6 +288,29 @@ one passes.
 - Game windows (6.8): on-demand VRR, tearing, pointer confinement, idle inhibit.
 - Verify direct scanout of fullscreen games (`WLR_DEBUG`/scene logs show it).
 - linux-drm-syncobj, drm-lease, content-type.
+- Steps, one commit each:
+  - [x] 4.1 Game rules (6.7): `isgame` and `isfullscreen` rule fields, the game
+    rows in `config.h`, games open on DP-3, fullscreen once titled (also when the
+    title arrives after mapping). *Check:* headless, a `steam_app_1` window with no
+    title opens on the game output, not fullscreen; setting a title fullscreens it;
+    a `Minecraft 1.21` title is game + fullscreen; `get clients` shows `game`.
+  - [ ] 4.2 Pointer confined to a focused game. *Check:* headless virtual pointer
+    can't leave a focused game window; it can once focus moves.
+  - [ ] 4.3 Idle inhibited while a game is fullscreen. *Check:* an idle-notify
+    client gets no idle event while a fullscreen game is mapped, and does after.
+  - [ ] 4.4 tearing-control-v1: async page flips for a fullscreen game that asks.
+    *Check:* headless `get outputs` reports tearing on/off as the hint and
+    fullscreen state change; real flips checked on hardware.
+  - [ ] 4.5 On-demand VRR on the game's output while fullscreen and focused.
+    *Check:* `get outputs` vrr follows focus/fullscreen headless (where
+    supported); real VRR on DP-3 by hand.
+  - [ ] 4.6 Direct scanout: log when a fullscreen game is scanned out
+    (`-d`). *Check:* on hardware the log shows scanout for a fullscreen game.
+  - [ ] 4.7 drm-lease-v1 on the DRM backend. *Check:* the global is advertised on
+    hardware (`wayland-info`), absent nested/headless without crashing.
+  - [ ] 4.8 content-type-v1: treat a `game` content type like a game rule.
+    *Check:* headless client setting content type game gets `game` in `get clients`.
+  - [ ] 4.9 Test matrix (11.2) on real hardware.
 - **Accept:** test matrix (section 11) passes, including 50 focus switches in and out
   of a fullscreen Proton game without a freeze.
 

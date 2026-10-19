@@ -170,6 +170,7 @@ typedef struct {
 	uint32_t tags;
 	int isfloating, isurgent, isfullscreen, ismaximized;
 	int isoverlay; /* drawn above fullscreen windows */
+	int isgame;
 	const Scratchpad *scratchpad; /* claimed by it; hidden while tags is 0 */
 	uint32_t rulesdone; /* rules already applied, bit per rule */
 	int column, row; /* scroller position on its tag, column -1 means unplaced */
@@ -270,6 +271,8 @@ typedef struct {
 	int offx, offy;      /* floating offset from centre, percent; 100 is the edge */
 	int nofocus;         /* don't focus on map */
 	int nomapfs;         /* ignore fullscreen requested before mapping */
+	int isgame;          /* DESIGN.md 6.8 */
+	int isfullscreen;
 } Rule;
 
 typedef struct {
@@ -596,7 +599,7 @@ applyrules(Client *c)
 	uint32_t newtags = 0;
 	const Rule *r;
 	Monitor *mon = selmon, *m;
-	int w = 0, h = 0, offx = 0, offy = 0, nofocus = 0, nomapfs = 0;
+	int w = 0, h = 0, offx = 0, offy = 0, nofocus = 0, nomapfs = 0, game = 0, fs = 0;
 	size_t i;
 
 	c->rulesdone = 0;
@@ -615,11 +618,18 @@ applyrules(Client *c)
 		offy = r->offy ? r->offy : offy;
 		nofocus |= r->nofocus;
 		nomapfs |= r->nomapfs;
+		game |= r->isgame;
+		fs |= r->isfullscreen;
 	}
 	/* satellite fullscreens any X window that maps at an output's size,
 	 * like Steam reopening at the size it was tiled to */
 	if (nomapfs)
 		c->isfullscreen = 0;
+	/* not a game's dialogs, which mapnotify() places by their parent */
+	if (!client_get_parent(c)) {
+		c->isgame |= game;
+		c->isfullscreen |= fs;
+	}
 
 	c->isfloating |= client_is_float_type(c);
 	for (i = 0; !c->scratchpad && i < LENGTH(scratchpads); i++)
@@ -2848,7 +2858,7 @@ reapplyrules(Client *c)
 	Monitor *m;
 	size_t i;
 
-	if (!c->mon || !client_surface(c)->mapped)
+	if (!c->mon || !client_surface(c)->mapped || client_get_parent(c))
 		return;
 	/* Scratchpads that set their title late, like a second VS Code */
 	for (i = 0; !c->scratchpad && i < LENGTH(scratchpads); i++) {
@@ -2863,6 +2873,7 @@ reapplyrules(Client *c)
 		if ((c->rulesdone & (1u << (r - rules))) || !rulematches(c, r))
 			continue;
 		c->rulesdone |= 1u << (r - rules);
+		c->isgame |= r->isgame;
 		wl_list_for_each(m, &mons, link)
 			if (r->monitor && !strcmp(r->monitor, m->wlr_output->name) && m != c->mon)
 				setmon(c, m, r->tags);
@@ -2875,6 +2886,8 @@ reapplyrules(Client *c)
 			setfloating(c, 1);
 		if (c->isfloating && (r->width || r->height || r->offx || r->offy))
 			placefloating(c, &c->mon->w, r->width, r->height, r->offx, r->offy);
+		if (r->isfullscreen && !c->isfullscreen)
+			setfullscreen(c, 1);
 	}
 }
 

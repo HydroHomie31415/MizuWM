@@ -139,11 +139,12 @@ bclient(Buf *b, Client *c)
 	bstr(b, c->mon ? c->mon->wlr_output->name : NULL);
 	bprintf(b, ",\"tag\":%d,\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d,"
 			"\"floating\":%s,\"fullscreen\":%s,\"maximized\":%s,\"urgent\":%s,"
-			"\"visible\":%s,\"focused\":%s,\"overlay\":%s,\"scratchpad\":",
+			"\"visible\":%s,\"focused\":%s,\"overlay\":%s,\"game\":%s,\"scratchpad\":",
 			tagnum(c->tags), c->geom.x, c->geom.y, c->geom.width, c->geom.height,
 			JBOOL(c->isfloating), JBOOL(c->isfullscreen), JBOOL(c->ismaximized),
 			JBOOL(c->isurgent), JBOOL(VISIBLEON(c, c->mon)),
-			JBOOL(selmon && c == focustop(selmon)), JBOOL(c->isoverlay));
+			JBOOL(selmon && c == focustop(selmon)), JBOOL(c->isoverlay),
+			JBOOL(c->isgame));
 	bstr(b, c->scratchpad ? c->scratchpad->name : NULL);
 	bputs(b, "}");
 }
