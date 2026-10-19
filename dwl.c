@@ -37,6 +37,7 @@
 #include <wlr/types/wlr_ext_image_capture_source_v1.h>
 #include <wlr/types/wlr_ext_image_copy_capture_v1.h>
 #include <wlr/types/wlr_ext_foreign_toplevel_list_v1.h>
+#include <wlr/types/wlr_ext_workspace_v1.h>
 #include <wlr/types/wlr_fractional_scale_v1.h>
 #include <wlr/types/wlr_gamma_control_v1.h>
 #include <wlr/types/wlr_idle_inhibit_v1.h>
@@ -223,6 +224,8 @@ struct Monitor {
 	int nmaster;
 	char ltsymbol[16];
 	int asleep;
+	struct wlr_ext_workspace_group_handle_v1 *wsgroup;
+	struct wlr_ext_workspace_handle_v1 *ws[32]; /* per tag */
 };
 
 typedef struct {
@@ -397,11 +400,13 @@ static void updatemons(struct wl_listener *listener, void *data);
 static void updateappid(struct wl_listener *listener, void *data);
 static void updatetitle(struct wl_listener *listener, void *data);
 static void urgent(struct wl_listener *listener, void *data);
+static void updateworkspaces(void);
 static void view(const Arg *arg);
 static void viewadj(const Arg *arg);
 static void virtualkeyboard(struct wl_listener *listener, void *data);
 static void virtualpointer(struct wl_listener *listener, void *data);
 static void warpto(struct wlr_box *b);
+static void workspacecommit(struct wl_listener *listener, void *data);
 static Monitor *xytomon(double x, double y);
 static void xytonode(double x, double y, struct wlr_surface **psurface,
 		Client **pc, LayerSurface **pl, double *nx, double *ny);
@@ -443,6 +448,7 @@ static struct wlr_virtual_pointer_manager_v1 *virtual_pointer_mgr;
 static struct wlr_cursor_shape_manager_v1 *cursor_shape_mgr;
 static struct wlr_output_power_manager_v1 *power_mgr;
 static struct wlr_ext_foreign_toplevel_list_v1 *foreign_toplevel_list;
+static struct wlr_ext_workspace_manager_v1 *workspace_mgr;
 static struct wlr_ext_foreign_toplevel_image_capture_source_manager_v1 *ext_foreign_toplevel_image_capture_source_manager_v1;
 
 static struct wlr_pointer_constraints_v1 *pointer_constraints;
@@ -503,6 +509,7 @@ static struct wl_listener request_start_drag = {.notify = requeststartdrag};
 static struct wl_listener start_drag = {.notify = startdrag};
 static struct wl_listener new_session_lock = {.notify = locksession};
 static struct wl_listener new_foreign_toplevel_capture_request = {.notify = capturerequest};
+static struct wl_listener workspace_commit = {.notify = workspacecommit};
 
 /* configuration, allows nested code to access above variables */
 #include "config.h"
@@ -891,6 +898,9 @@ cleanupmon(struct wl_listener *listener, void *data)
 	wlr_scene_output_destroy(m->scene_output);
 
 	closemon(m);
+	for (i = 0; i < TAGCOUNT; i++)
+		wlr_ext_workspace_handle_v1_destroy(m->ws[i]);
+	wlr_ext_workspace_group_handle_v1_destroy(m->wsgroup);
 	wlr_scene_node_destroy(&m->fullscreen_bg->node);
 	free(m);
 }
@@ -927,6 +937,7 @@ cleanuplisteners(void)
 	wl_list_remove(&start_drag.link);
 	wl_list_remove(&new_session_lock.link);
 	wl_list_remove(&new_foreign_toplevel_capture_request.link);
+	wl_list_remove(&workspace_commit.link);
 }
 
 void
@@ -1205,6 +1216,8 @@ createmon(struct wl_listener *listener, void *data)
 	struct wlr_output *wlr_output = data;
 	const MonitorRule *r;
 	size_t i;
+	uint32_t coord;
+	char name[64];
 	struct wlr_output_state state;
 	Monitor *m;
 
@@ -1229,6 +1242,20 @@ createmon(struct wl_listener *listener, void *data)
 		m->lt[i] = r->lt;
 	strncpy(m->ltsymbol, r->lt->symbol, LENGTH(m->ltsymbol));
 	monrulestate(wlr_output, r, &state);
+
+	/* One ext-workspace group per output, a workspace per tag */
+	m->wsgroup = wlr_ext_workspace_group_handle_v1_create(workspace_mgr, 0);
+	wlr_ext_workspace_group_handle_v1_output_enter(m->wsgroup, wlr_output);
+	for (i = 0; i < TAGCOUNT; i++) {
+		coord = i;
+		snprintf(name, sizeof(name), "%s/%zu", wlr_output->name, i + 1);
+		m->ws[i] = wlr_ext_workspace_handle_v1_create(workspace_mgr, name,
+				EXT_WORKSPACE_HANDLE_V1_WORKSPACE_CAPABILITIES_ACTIVATE);
+		m->ws[i]->data = m;
+		wlr_ext_workspace_handle_v1_set_group(m->ws[i], m->wsgroup);
+		wlr_ext_workspace_handle_v1_set_name(m->ws[i], strrchr(name, '/') + 1);
+		wlr_ext_workspace_handle_v1_set_coordinates(m->ws[i], &coord, 1);
+	}
 
 	/* Set up event listeners */
 	LISTEN(&wlr_output->events.frame, &m->frame, rendermon);
@@ -2618,6 +2645,7 @@ printstatus(void)
 		printf("%s layout %s\n", m->wlr_output->name, m->ltsymbol);
 	}
 	fflush(stdout);
+	updateworkspaces();
 	ipcstatus();
 }
 
@@ -3449,6 +3477,9 @@ setup(void)
 	droparea = wlr_scene_rect_create(layers[LyrTile], 0, 0, dropcolor);
 	wlr_scene_node_set_enabled(&droparea->node, 0);
 
+	workspace_mgr = wlr_ext_workspace_manager_v1_create(dpy, 1);
+	wl_signal_add(&workspace_mgr->events.commit, &workspace_commit);
+
 	foreign_toplevel_list = wlr_ext_foreign_toplevel_list_v1_create(dpy,1);
 	ext_foreign_toplevel_image_capture_source_manager_v1 =
             wlr_ext_foreign_toplevel_image_capture_source_manager_v1_create(dpy, 1);
@@ -3998,6 +4029,27 @@ urgent(struct wl_listener *listener, void *data)
 }
 
 void
+updateworkspaces(void)
+{
+	Monitor *m;
+	Client *c;
+	uint32_t urg;
+	int i;
+
+	wl_list_for_each(m, &mons, link) {
+		urg = 0;
+		wl_list_for_each(c, &clients, link)
+			if (c->mon == m && c->isurgent)
+				urg |= c->tags;
+		for (i = 0; i < TAGCOUNT; i++) {
+			wlr_ext_workspace_handle_v1_set_active(m->ws[i],
+					m->tagset[m->seltags] & 1u << i);
+			wlr_ext_workspace_handle_v1_set_urgent(m->ws[i], urg & 1u << i);
+		}
+	}
+}
+
+void
 view(const Arg *arg)
 {
 	if (!selmon || (arg->ui & TAGMASK) == selmon->tagset[selmon->seltags])
@@ -4056,6 +4108,28 @@ warpto(struct wlr_box *b)
 		return;
 	wlr_cursor_warp_closest(cursor, NULL, b->x + b->width / 2.0, b->y + b->height / 2.0);
 	motionnotify(0, NULL, 0, 0, 0, 0);
+}
+
+void
+workspacecommit(struct wl_listener *listener, void *data)
+{
+	/* A workspace bar asks to show a tag */
+	struct wlr_ext_workspace_v1_commit_event *event = data;
+	struct wlr_ext_workspace_v1_request *req;
+	Monitor *m;
+	int i;
+
+	wl_list_for_each(req, event->requests, link) {
+		if (req->type != WLR_EXT_WORKSPACE_V1_REQUEST_ACTIVATE || !req->activate.workspace)
+			continue;
+		m = req->activate.workspace->data;
+		for (i = 0; i < TAGCOUNT && m->ws[i] != req->activate.workspace; i++);
+		if (i == TAGCOUNT || !m->wlr_output->enabled)
+			continue;
+		selmon = m;
+		view(&(Arg){.ui = 1u << i});
+		focusclient(focustop(selmon), NULL, 1);
+	}
 }
 
 Monitor *
