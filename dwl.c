@@ -268,6 +268,7 @@ typedef struct {
 	int width, height;   /* floating size, 0 keeps the client's */
 	int offx, offy;      /* floating offset from centre, percent; 100 is the edge */
 	int nofocus;         /* don't focus on map */
+	int nomapfs;         /* ignore fullscreen requested before mapping */
 } Rule;
 
 typedef struct {
@@ -588,7 +589,7 @@ applyrules(Client *c)
 	uint32_t newtags = 0;
 	const Rule *r;
 	Monitor *mon = selmon, *m;
-	int w = 0, h = 0, offx = 0, offy = 0, nofocus = 0;
+	int w = 0, h = 0, offx = 0, offy = 0, nofocus = 0, nomapfs = 0;
 	size_t i;
 
 	c->rulesdone = 0;
@@ -606,7 +607,12 @@ applyrules(Client *c)
 		offx = r->offx ? r->offx : offx;
 		offy = r->offy ? r->offy : offy;
 		nofocus |= r->nofocus;
+		nomapfs |= r->nomapfs;
 	}
+	/* satellite fullscreens any X window that maps at an output's size,
+	 * like Steam reopening at the size it was tiled to */
+	if (nomapfs)
+		c->isfullscreen = 0;
 
 	c->isfloating |= client_is_float_type(c);
 	for (i = 0; !c->scratchpad && i < LENGTH(scratchpads); i++)

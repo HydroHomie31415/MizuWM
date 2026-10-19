@@ -49,6 +49,7 @@ static const Rule rules[] = {
 	{ .id = "^dev\\.noctalia\\.Noctalia$", .isfloating = 1, .width = 1080, .height = 920 },
 	{ .id = "^steam$", .title = "^notificationtoasts_[0-9]+_desktop$",
 	  .isfloating = 1, .nofocus = 1, .offx = 100, .offy = 100 },
+	{ .id = "^steam$", .nomapfs = 1 },
 	/* TODO phase 4: game rules (DESIGN.md 6.7, 6.8) */
 };
 
