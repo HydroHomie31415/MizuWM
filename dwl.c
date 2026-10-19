@@ -38,6 +38,7 @@
 #include <wlr/types/wlr_ext_image_copy_capture_v1.h>
 #include <wlr/types/wlr_ext_foreign_toplevel_list_v1.h>
 #include <wlr/types/wlr_ext_workspace_v1.h>
+#include <wlr/types/wlr_foreign_toplevel_management_v1.h>
 #include <wlr/types/wlr_fractional_scale_v1.h>
 #include <wlr/types/wlr_gamma_control_v1.h>
 #include <wlr/types/wlr_idle_inhibit_v1.h>
@@ -137,6 +138,7 @@ typedef struct {
 	} surface;
 	struct wlr_xdg_toplevel_decoration_v1 *decoration;
 	struct wlr_ext_foreign_toplevel_handle_v1 *foreign_toplevel_handle;
+	struct wlr_foreign_toplevel_handle_v1 *toplevel_handle; /* wlr, for taskbars */
 	struct wlr_scene *image_capture_scene;
 	struct wlr_ext_image_capture_source_v1 *image_capture_source;
 	union {
@@ -152,6 +154,10 @@ typedef struct {
 	struct wl_listener fullscreen;
 	struct wl_listener set_decoration_mode;
 	struct wl_listener destroy_decoration;
+	struct wl_listener toplevel_activate;
+	struct wl_listener toplevel_close;
+	struct wl_listener toplevel_fullscreen;
+	struct wl_listener toplevel_maximize;
 	unsigned int bw, id; /* id: for IPC, never reused */
 	uint32_t tags;
 	int isfloating, isurgent, isfullscreen, ismaximized;
@@ -389,6 +395,10 @@ static void tag(const Arg *arg);
 static void tagadj(const Arg *arg);
 static void tagmon(const Arg *arg);
 static void tile(Monitor *m);
+static void toplevelactivate(struct wl_listener *listener, void *data);
+static void toplevelclose(struct wl_listener *listener, void *data);
+static void toplevelfullscreen(struct wl_listener *listener, void *data);
+static void toplevelmaximize(struct wl_listener *listener, void *data);
 static void togglefloating(const Arg *arg);
 static void togglefullscreen(const Arg *arg);
 static void togglemaximizescreen(const Arg *arg);
@@ -448,6 +458,7 @@ static struct wlr_virtual_pointer_manager_v1 *virtual_pointer_mgr;
 static struct wlr_cursor_shape_manager_v1 *cursor_shape_mgr;
 static struct wlr_output_power_manager_v1 *power_mgr;
 static struct wlr_ext_foreign_toplevel_list_v1 *foreign_toplevel_list;
+static struct wlr_foreign_toplevel_manager_v1 *foreign_toplevel_mgr;
 static struct wlr_ext_workspace_manager_v1 *workspace_mgr;
 static struct wlr_ext_foreign_toplevel_image_capture_source_manager_v1 *ext_foreign_toplevel_image_capture_source_manager_v1;
 
@@ -1818,6 +1829,8 @@ focusclient(Client *c, LayerSurface *l, int lift)
 			client_set_border_color(focused_client, bordercolor);
 		if (s && s->mapped)
 			client_activate_surface(s, 0);
+		if (focused_client->toplevel_handle)
+			wlr_foreign_toplevel_handle_v1_set_activated(focused_client->toplevel_handle, 0);
 		focused_client = NULL;
 	}
 	printstatus();
@@ -1837,6 +1850,8 @@ focusclient(Client *c, LayerSurface *l, int lift)
 		return;
 
 	client_activate_surface(surface, 1);
+	if (c->toplevel_handle)
+		wlr_foreign_toplevel_handle_v1_set_activated(c->toplevel_handle, 1);
 	motionnotify(0, NULL, 0, 0, 0, 0);
 
 	focused_client = c;
@@ -2163,6 +2178,13 @@ mapnotify(struct wl_listener *listener, void *data)
 	c->foreign_toplevel_handle = wlr_ext_foreign_toplevel_handle_v1_create(
 			foreign_toplevel_list, &foreign_toplevel_state);
 	c->foreign_toplevel_handle->data = c;
+	c->toplevel_handle = wlr_foreign_toplevel_handle_v1_create(foreign_toplevel_mgr);
+	wlr_foreign_toplevel_handle_v1_set_title(c->toplevel_handle, client_get_title(c));
+	wlr_foreign_toplevel_handle_v1_set_app_id(c->toplevel_handle, client_get_appid(c));
+	LISTEN(&c->toplevel_handle->events.request_activate, &c->toplevel_activate, toplevelactivate);
+	LISTEN(&c->toplevel_handle->events.request_close, &c->toplevel_close, toplevelclose);
+	LISTEN(&c->toplevel_handle->events.request_fullscreen, &c->toplevel_fullscreen, toplevelfullscreen);
+	LISTEN(&c->toplevel_handle->events.request_maximize, &c->toplevel_maximize, toplevelmaximize);
 	c->image_capture_scene = wlr_scene_create();
 	c->capture.image_capture_tree = wlr_scene_xdg_surface_create(&c->image_capture_scene->tree, c->surface.xdg);
 
@@ -3207,6 +3229,8 @@ setfullscreen(Client *c, int fullscreen)
 		return;
 	c->bw = fullscreen ? 0 : borderpx;
 	client_set_fullscreen(c, fullscreen);
+	if (c->toplevel_handle)
+		wlr_foreign_toplevel_handle_v1_set_fullscreen(c->toplevel_handle, fullscreen);
 	wlr_scene_node_reparent(&c->scene->node, layers[c->isfullscreen
 			? LyrFS : c->isfloating || c->ismaximized ? LyrFloat : LyrTile]);
 
@@ -3262,6 +3286,8 @@ setmaximized(Client *c, int maximized)
 	if (!c->mon || !client_surface(c)->mapped || c->isfullscreen)
 		return;
 	client_set_maximized(c, maximized);
+	if (c->toplevel_handle)
+		wlr_foreign_toplevel_handle_v1_set_maximized(c->toplevel_handle, maximized);
 	wlr_scene_node_reparent(&c->scene->node, layers[maximized || c->isfloating
 			? LyrFloat : LyrTile]);
 	if (maximized) {
@@ -3298,6 +3324,10 @@ setmon(Client *c, Monitor *m, uint32_t newtags)
 	c->mon = m;
 	c->prev = c->geom;
 	c->column = -1;
+	if (c->toplevel_handle && oldmon)
+		wlr_foreign_toplevel_handle_v1_output_leave(c->toplevel_handle, oldmon->wlr_output);
+	if (c->toplevel_handle && m)
+		wlr_foreign_toplevel_handle_v1_output_enter(c->toplevel_handle, m->wlr_output);
 
 	/* Scene graph sends surface leave/enter events on move and resize */
 	if (oldmon)
@@ -3477,6 +3507,7 @@ setup(void)
 	droparea = wlr_scene_rect_create(layers[LyrTile], 0, 0, dropcolor);
 	wlr_scene_node_set_enabled(&droparea->node, 0);
 
+	foreign_toplevel_mgr = wlr_foreign_toplevel_manager_v1_create(dpy);
 	workspace_mgr = wlr_ext_workspace_manager_v1_create(dpy, 1);
 	wl_signal_add(&workspace_mgr->events.commit, &workspace_commit);
 
@@ -3787,6 +3818,45 @@ tile(Monitor *m)
 }
 
 void
+toplevelactivate(struct wl_listener *listener, void *data)
+{
+	/* A taskbar click: go to the window, as with xdg-activation */
+	Client *c = wl_container_of(listener, c, toplevel_activate);
+
+	if (!c->mon)
+		return;
+	selmon = c->mon;
+	if (!VISIBLEON(c, c->mon))
+		view(&(Arg){.ui = c->tags});
+	focusclient(c, NULL, 1);
+	warpto(&c->geom);
+}
+
+void
+toplevelclose(struct wl_listener *listener, void *data)
+{
+	Client *c = wl_container_of(listener, c, toplevel_close);
+	client_send_close(c);
+}
+
+void
+toplevelfullscreen(struct wl_listener *listener, void *data)
+{
+	struct wlr_foreign_toplevel_handle_v1_fullscreen_event *event = data;
+	Client *c = wl_container_of(listener, c, toplevel_fullscreen);
+	setfullscreen(c, event->fullscreen);
+}
+
+void
+toplevelmaximize(struct wl_listener *listener, void *data)
+{
+	struct wlr_foreign_toplevel_handle_v1_maximized_event *event = data;
+	Client *c = wl_container_of(listener, c, toplevel_maximize);
+	if (!c->isfullscreen)
+		setmaximized(c, event->maximized);
+}
+
+void
 togglefloating(const Arg *arg)
 {
 	Client *sel = focustop(selmon);
@@ -3855,6 +3925,14 @@ unmapnotify(struct wl_listener *listener, void *data)
 	if (c->foreign_toplevel_handle) {
 		wlr_ext_foreign_toplevel_handle_v1_destroy(c->foreign_toplevel_handle);
 		c->foreign_toplevel_handle = NULL;
+	}
+	if (c->toplevel_handle) {
+		wl_list_remove(&c->toplevel_activate.link);
+		wl_list_remove(&c->toplevel_close.link);
+		wl_list_remove(&c->toplevel_fullscreen.link);
+		wl_list_remove(&c->toplevel_maximize.link);
+		wlr_foreign_toplevel_handle_v1_destroy(c->toplevel_handle);
+		c->toplevel_handle = NULL;
 	}
 
 	wlr_scene_node_destroy(&c->image_capture_scene->tree.node);
@@ -3997,6 +4075,10 @@ updatetitle(struct wl_listener *listener, void *data)
 		};
 		wlr_ext_foreign_toplevel_handle_v1_update_state(c->foreign_toplevel_handle,
 				&foreign_toplevel_state);
+	}
+	if (c->toplevel_handle) {
+		wlr_foreign_toplevel_handle_v1_set_title(c->toplevel_handle, client_get_title(c));
+		wlr_foreign_toplevel_handle_v1_set_app_id(c->toplevel_handle, client_get_appid(c));
 	}
 	reapplyrules(c);
 }
