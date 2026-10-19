@@ -175,6 +175,10 @@ typedef struct {
 	uint32_t rulesdone; /* rules already applied, bit per rule */
 	int column, row; /* scroller position on its tag, column -1 means unplaced */
 	float proportion, cfact; /* column width share, height weight in column */
+	struct wlr_box animfrom, animto; /* drawn moving from animfrom to animto */
+	uint32_t animstart; /* ms */
+	int animdur; /* 0 when not moving */
+	int shown; /* visible at the last arrange; only those animate */
 } Client;
 
 typedef struct {
@@ -286,7 +290,10 @@ typedef struct {
 
 /* function declarations */
 void nestedinhibit(struct wlr_output *output); /* nested.c */
+static void animate(Monitor *m);
+static struct wlr_box animbox(Client *c, uint32_t now);
 static void applybounds(Client *c, struct wlr_box *bbox);
+static void applygeom(Client *c, struct wlr_box b);
 static void applyrules(Client *c);
 static void arrange(Monitor *m);
 static void arrangelayer(Monitor *m, struct wl_list *list,
@@ -365,6 +372,7 @@ static void motionnotify(uint32_t time, struct wlr_input_device *device, double 
 		double sy, double sx_unaccel, double sy_unaccel);
 static void motionrelative(struct wl_listener *listener, void *data);
 static void moveresize(const Arg *arg);
+static uint32_t nowms(void);
 static int openxdisplay(void);
 static int openxsocket(int n, int abstract);
 static void outputmgrapply(struct wl_listener *listener, void *data);
@@ -562,6 +570,47 @@ static regex_t scratchregex[LENGTH(scratchpads)][2];
 
 /* function implementations */
 void
+animate(Monitor *m)
+{
+	/* Called every frame; keeps frames coming while something moves */
+	Client *c;
+	uint32_t now = nowms();
+	int busy = 0, done = 0;
+
+	wl_list_for_each(c, &clients, link) {
+		if (c->mon != m || !c->animdur)
+			continue;
+		if (!animations || c->isgame || now - c->animstart >= (uint32_t)c->animdur) {
+			c->animdur = 0;
+			done = 1;
+		}
+		busy |= c->animdur;
+		applygeom(c, animbox(c, now));
+	}
+	if (busy)
+		wlr_output_schedule_frame(m->wlr_output);
+	if (done) /* the pointer may be over another window now */
+		motionnotify(0, NULL, 0, 0, 0, 0);
+}
+
+struct wlr_box
+animbox(Client *c, uint32_t now)
+{
+	/* Where c is drawn now, easing out (cubic) */
+	struct wlr_box *a = &c->animfrom, *b = &c->animto;
+	float t = c->animdur ? (float)(now - c->animstart) / (float)c->animdur : 1;
+
+	t = t < 1 ? 1 - t : 0;
+	t = 1 - t * t * t;
+	return (struct wlr_box){
+		.x = a->x + (int)lroundf((float)(b->x - a->x) * t),
+		.y = a->y + (int)lroundf((float)(b->y - a->y) * t),
+		.width = a->width + (int)lroundf((float)(b->width - a->width) * t),
+		.height = a->height + (int)lroundf((float)(b->height - a->height) * t),
+	};
+}
+
+void
 applybounds(Client *c, struct wlr_box *bbox)
 {
 	/* set minimum client size to 1 */
@@ -591,6 +640,47 @@ applybounds(Client *c, struct wlr_box *bbox)
 		c->geom.x = bbox->x;
 	if (c->geom.y + c->geom.height <= bbox->y)
 		c->geom.y = bbox->y;
+}
+
+void
+applygeom(Client *c, struct wlr_box b)
+{
+	/* Draw c at b, which differs from c->geom while it moves */
+	struct wlr_box clip, mclip, *m = &c->mon->m;
+	struct wlr_box bb[4] = {
+		{0, 0, b.width, (int)c->bw},
+		{0, b.height - (int)c->bw, b.width, (int)c->bw},
+		{0, (int)c->bw, (int)c->bw, b.height - 2 * (int)c->bw},
+		{b.width - (int)c->bw, (int)c->bw, (int)c->bw, b.height - 2 * (int)c->bw},
+	};
+	int i;
+
+	wlr_scene_node_set_position(&c->scene->node, b.x, b.y);
+	wlr_scene_node_set_position(&c->scene_surface->node, c->bw, c->bw);
+	for (i = 0; i < 4; i++) {
+		bb[i].x += b.x;
+		bb[i].y += b.y;
+		/* Don't let a column hanging off this monitor draw on its neighbour */
+		if (!c->isfloating)
+			wlr_box_intersection(&bb[i], &bb[i], m);
+		wlr_scene_node_set_enabled(&c->border[i]->node, !wlr_box_empty(&bb[i]));
+		wlr_scene_node_set_position(&c->border[i]->node, bb[i].x - b.x, bb[i].y - b.y);
+		wlr_scene_rect_set_size(c->border[i], bb[i].width, bb[i].height);
+	}
+
+	client_get_clip(c, &b, &clip);
+	if (!c->isfloating) {
+		mclip = (struct wlr_box){
+			.x = m->x - b.x - (int)c->bw + clip.x,
+			.y = m->y - b.y - (int)c->bw + clip.y,
+			.width = m->width,
+			.height = m->height,
+		};
+		wlr_scene_node_set_enabled(&c->scene->node, VISIBLEON(c, c->mon)
+				&& wlr_box_intersection(&mclip, &clip, &mclip));
+		clip = mclip;
+	}
+	wlr_scene_subsurface_tree_set_clip(&c->scene_surface->node, &clip);
 }
 
 void
@@ -704,6 +794,9 @@ arrange(Monitor *m)
 			resize(c, m->w, 0);
 	if (LAYOUT(m)->arrange)
 		LAYOUT(m)->arrange(m);
+	wl_list_for_each(c, &clients, link)
+		if (c->mon == m)
+			c->shown = VISIBLEON(c, m);
 	motionnotify(0, NULL, 0, 0, 0, 0);
 	checkidleinhibitor(NULL);
 }
@@ -2585,6 +2678,14 @@ moveresize(const Arg *arg)
 	}
 }
 
+uint32_t
+nowms(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint32_t)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
+}
+
 int
 openxdisplay(void)
 {
@@ -2850,6 +2951,7 @@ rendermon(struct wl_listener *listener, void *data)
 
 	if (!hidden_armed)
 		hiddenframes(NULL);
+	animate(m);
 	if (!wlr_scene_output_needs_frame(m->scene_output)) {
 		return;
 	}
@@ -2934,8 +3036,7 @@ void
 resize(Client *c, struct wlr_box geo, int interact)
 {
 	struct wlr_box *bbox;
-	struct wlr_box clip, mclip, *m, bb[4];
-	int i;
+	uint32_t now;
 
 	if (!c->mon || !client_surface(c)->mapped)
 		return;
@@ -2948,40 +3049,18 @@ resize(Client *c, struct wlr_box geo, int interact)
 	applybounds(c, c->isfloating || interact ? bbox : NULL);
 	if (c->isfloating && !c->isfullscreen && !c->ismaximized && !(c == grabc && grabtile))
 		c->floatgeom = c->geom;
-	bb[0] = (struct wlr_box){0, 0, c->geom.width, (int)c->bw};
-	bb[1] = (struct wlr_box){0, c->geom.height - (int)c->bw, c->geom.width, (int)c->bw};
-	bb[2] = (struct wlr_box){0, (int)c->bw, (int)c->bw, c->geom.height - 2 * (int)c->bw};
-	bb[3] = (struct wlr_box){c->geom.width - (int)c->bw, (int)c->bw, (int)c->bw, c->geom.height - 2 * (int)c->bw};
-
-	/* Update scene-graph, including borders */
-	wlr_scene_node_set_position(&c->scene->node, c->geom.x, c->geom.y);
-	wlr_scene_node_set_position(&c->scene_surface->node, c->bw, c->bw);
-	for (i = 0; i < 4; i++) {
-		bb[i].x += c->geom.x;
-		bb[i].y += c->geom.y;
-		/* Don't let a column hanging off this monitor draw on its neighbour */
-		if (!c->isfloating)
-			wlr_box_intersection(&bb[i], &bb[i], &c->mon->m);
-		wlr_scene_node_set_enabled(&c->border[i]->node, !wlr_box_empty(&bb[i]));
-		wlr_scene_node_set_position(&c->border[i]->node, bb[i].x - c->geom.x, bb[i].y - c->geom.y);
-		wlr_scene_rect_set_size(c->border[i], bb[i].width, bb[i].height);
-	}
-
 	client_set_size(c, c->geom.width - 2 * c->bw, c->geom.height - 2 * c->bw);
-	client_get_clip(c, &clip);
-	if (!c->isfloating) {
-		m = &c->mon->m;
-		mclip = (struct wlr_box){
-			.x = m->x - c->geom.x - (int)c->bw + clip.x,
-			.y = m->y - c->geom.y - (int)c->bw + clip.y,
-			.width = m->width,
-			.height = m->height,
-		};
-		wlr_scene_node_set_enabled(&c->scene->node, VISIBLEON(c, c->mon)
-				&& wlr_box_intersection(&mclip, &clip, &mclip));
-		clip = mclip;
+
+	now = nowms();
+	if (!wlr_box_equal(&c->geom, &c->animto)) {
+		c->animfrom = animbox(c, now);
+		c->animto = c->geom;
+		c->animstart = now;
+		c->animdur = animations && c->shown && !c->isgame && !interact ? animmove : 0;
+		if (c->animdur)
+			wlr_output_schedule_frame(c->mon->wlr_output);
 	}
-	wlr_scene_subsurface_tree_set_clip(&c->scene_surface->node, &clip);
+	applygeom(c, animbox(c, now));
 }
 
 void
@@ -3491,6 +3570,7 @@ setmon(Client *c, Monitor *m, uint32_t newtags)
 	c->mon = m;
 	c->prev = c->geom;
 	c->column = -1;
+	c->shown = 0; /* don't fly across monitors */
 	if (c->toplevel_handle && oldmon)
 		wlr_foreign_toplevel_handle_v1_output_leave(c->toplevel_handle, oldmon->wlr_output);
 	if (c->toplevel_handle && m)

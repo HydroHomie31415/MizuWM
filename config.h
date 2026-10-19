@@ -18,6 +18,8 @@ static const float urgentcolor[]           = COLOR(0xd95757ff);
 static const float dropcolor[]             = COLOR(0x735a2880); /* mango's drop_color 0xe6b45080, premultiplied */
 /* This conforms to the xdg-protocol. Set the alpha to zero to restore the old behavior */
 static const float fullscreen_bg[]         = {0.0f, 0.0f, 0.0f, 1.0f}; /* You can also use glsl colors */
+/* animations in ms, mango's durations; never on game windows */
+static const int animmove                  = 250;
 
 /* tagging - TAGCOUNT must be no greater than 31 */
 #define TAGCOUNT (9)
