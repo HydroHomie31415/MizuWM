@@ -2157,6 +2157,7 @@ mapnotify(struct wl_listener *listener, void *data)
 				.width = c->geom.width, .height = c->geom.height};
 		applyrules(c);
 	}
+	ipcclientevent("open", c);
 	printstatus();
 
 	m = c->mon ? c->mon : xytomon(c->geom.x, c->geom.y);
@@ -2617,6 +2618,7 @@ printstatus(void)
 		printf("%s layout %s\n", m->wlr_output->name, m->ltsymbol);
 	}
 	fflush(stdout);
+	ipcstatus();
 }
 
 void
@@ -3806,6 +3808,7 @@ unmapnotify(struct wl_listener *listener, void *data)
 {
 	/* Called when the surface is unmapped, and should no longer be shown. */
 	Client *c = wl_container_of(listener, c, unmap);
+	ipcclientevent("close", c);
 	if (c == grabc) {
 		cursor_mode = CurNormal;
 		grabc = NULL;
@@ -3946,6 +3949,7 @@ updatemons(struct wl_listener *listener, void *data)
 	wlr_cursor_move(cursor, NULL, 0, 0);
 
 	wlr_output_manager_v1_set_configuration(output_mgr, config);
+	ipcstatus();
 }
 
 void

@@ -16,7 +16,7 @@ typedef struct {
 
 typedef struct {
 	struct wl_list link;
-	int fd, dead;
+	int fd, dead, subscribed;
 	struct wl_event_source *source;
 	char in[4096];
 	size_t inlen;
@@ -61,6 +61,7 @@ static int ipcfd = -1;
 static char ipcpath[sizeof(((struct sockaddr_un *)0)->sun_path)];
 static struct wl_event_source *ipcsource, *ipcreaper;
 static struct wl_list ipcclients;
+static char *lastfocus, *lasttags, *lastoutputs; /* last events sent */
 
 static void
 bputn(Buf *b, const char *s, size_t n)
@@ -152,14 +153,11 @@ boutput(Buf *b, Monitor *m)
 	bputs(b, "{\"name\":");
 	bstr(b, o->name);
 	bprintf(b, ",\"enabled\":%s,\"mode\":{\"width\":%d,\"height\":%d,\"refresh\":%.3f},"
-			"\"x\":%d,\"y\":%d,\"scale\":%.2f,\"vrr\":%s,\"focused\":%s,\"tag\":%d,"
-			"\"layout\":",
+			"\"x\":%d,\"y\":%d,\"scale\":%.2f,\"vrr\":%s,\"focused\":%s}",
 			JBOOL(o->enabled), o->width, o->height, o->refresh / 1000.0,
 			m->m.x, m->m.y, o->scale,
 			JBOOL(o->adaptive_sync_status == WLR_OUTPUT_ADAPTIVE_SYNC_ENABLED),
-			JBOOL(m == selmon), tagnum(m->tagset[m->seltags]));
-	bstr(b, m->ltsymbol);
-	bputs(b, "}");
+			JBOOL(m == selmon));
 }
 
 static int
@@ -312,6 +310,110 @@ ipcflush(IpcClient *ic)
 		wl_event_source_fd_update(ic->source, WL_EVENT_READABLE);
 }
 
+static void
+bevents(Buf *b, Buf *focuskey, Buf *tags, Buf *outputs)
+{
+	/* The focus, tags and output events for the current state */
+	Client *c = selmon ? focustop(selmon) : NULL;
+	Monitor *m;
+	uint32_t occ, urg;
+	const char *sep = "";
+	int i;
+
+	bputs(focuskey, "");
+	if (c)
+		bprintf(focuskey, "%u %s", c->id, client_get_title(c));
+	bputs(b, "{\"event\":\"focus\",\"client\":");
+	bclient(b, c);
+	bputs(b, "}\n");
+
+	bputs(tags, "{\"event\":\"tags\",\"outputs\":[");
+	bputs(outputs, "{\"event\":\"output\",\"outputs\":[");
+	wl_list_for_each(m, &mons, link) {
+		occ = urg = 0;
+		wl_list_for_each(c, &clients, link) {
+			if (c->mon != m)
+				continue;
+			occ |= c->tags;
+			urg |= c->isurgent ? c->tags : 0;
+		}
+		bputs(tags, sep);
+		bputs(tags, "{\"name\":");
+		bstr(tags, m->wlr_output->name);
+		bprintf(tags, ",\"tag\":%d,\"occupied\":[", tagnum(m->tagset[m->seltags]));
+		for (i = 0; i < TAGCOUNT; i++)
+			if (occ & 1u << i)
+				bprintf(tags, "%s%d", (occ & ((1u << i) - 1)) ? "," : "", i + 1);
+		bputs(tags, "],\"urgent\":[");
+		for (i = 0; i < TAGCOUNT; i++)
+			if (urg & 1u << i)
+				bprintf(tags, "%s%d", (urg & ((1u << i) - 1)) ? "," : "", i + 1);
+		bputs(tags, "],\"layout\":");
+		bstr(tags, m->ltsymbol);
+		bputs(tags, "}");
+		bputs(outputs, sep);
+		boutput(outputs, m);
+		sep = ",";
+	}
+	bputs(tags, "]}\n");
+	bputs(outputs, "]}\n");
+}
+
+static void
+ipcbroadcast(Buf *b)
+{
+	IpcClient *ic;
+	wl_list_for_each(ic, &ipcclients, link)
+		if (ic->subscribed)
+			ipcsend(ic, b->s, b->len);
+}
+
+static void
+ipcchanged(char **last, const char *key, Buf *b)
+{
+	/* Send event b to subscribers when key differs from last time */
+	if (*last && !strcmp(*last, key))
+		return;
+	free(*last);
+	if (!(*last = strdup(key)))
+		die("strdup:");
+	ipcbroadcast(b);
+}
+
+static void
+ipcstatus(void)
+{
+	/* Called on every state change, see printstatus() */
+	IpcClient *ic;
+	Buf focus = {0}, focuskey = {0}, tags = {0}, outputs = {0};
+	int n = 0;
+
+	wl_list_for_each(ic, &ipcclients, link)
+		n += ic->subscribed && !ic->dead;
+	if (!n)
+		return;
+	bevents(&focus, &focuskey, &tags, &outputs);
+	ipcchanged(&lastfocus, focuskey.s, &focus);
+	ipcchanged(&lasttags, tags.s, &tags);
+	ipcchanged(&lastoutputs, outputs.s, &outputs);
+	free(focus.s);
+	free(focuskey.s);
+	free(tags.s);
+	free(outputs.s);
+}
+
+static void
+ipcclientevent(const char *event, Client *c)
+{
+	Buf b = {0};
+
+	bprintf(&b, "{\"event\":\"%s\",\"client\":", event);
+	bclient(&b, c);
+	bputs(&b, "}\n");
+	ipcbroadcast(&b);
+	free(b.s);
+}
+
 static const char *
 ipcoutput(const char *name, const char *state)
 {
@@ -424,10 +526,11 @@ ipcdispatch(int argc, char **argv)
 }
 
 static const char *
-ipccommand(Buf *b, int argc, char **argv)
+ipccommand(IpcClient *ic, Buf *b, int argc, char **argv)
 {
 	Client *c;
 	Monitor *m;
+	Buf key = {0}, tags = {0}, outputs = {0};
 	const char *sep = "";
 
 	if (!strcmp(argv[0], "get") && argc == 2) {
@@ -468,6 +571,16 @@ ipccommand(Buf *b, int argc, char **argv)
 		return ipcdispatch(argc - 1, argv + 1);
 	} else if (!strcmp(argv[0], "reload") && argc == 1) {
 		ipcreload();
+	} else if (!strcmp(argv[0], "subscribe") && argc == 1) {
+		/* The current state first, then changes */
+		ic->subscribed = 1;
+		bputs(b, "{\"ok\":true}\n");
+		bevents(b, &key, &tags, &outputs);
+		bputs(b, tags.s);
+		bputn(b, outputs.s, outputs.len - 1); /* ipcrequest() adds the newline */
+		free(key.s);
+		free(tags.s);
+		free(outputs.s);
 	} else {
 		return "unknown command";
 	}
@@ -483,7 +596,7 @@ ipcrequest(IpcClient *ic, char *line)
 	Buf b = {0};
 
 	err = argc < 1 ? "expected a non-empty JSON array of strings"
-			: ipccommand(&b, argc, argv);
+			: ipccommand(ic, &b, argc, argv);
 	if (err) {
 		b.len = 0;
 		bputs(&b, "{\"error\":");
@@ -589,6 +702,10 @@ ipccleanup(void)
 	wl_list_for_each(ic, &ipcclients, link)
 		ic->dead = 1;
 	ipcreap(NULL);
+	free(lastfocus);
+	free(lasttags);
+	free(lastoutputs);
+	lastfocus = lasttags = lastoutputs = NULL;
 	wl_event_source_remove(ipcsource);
 	close(ipcfd);
 	unlink(ipcpath);
