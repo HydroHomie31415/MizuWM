@@ -308,6 +308,7 @@ static void destroysessionlock(struct wl_listener *listener, void *data);
 static void destroykeyboardgroup(struct wl_listener *listener, void *data);
 static Client *dirclient(Client *sel, enum wlr_direction dir, int tiled);
 static Monitor *dirtomon(enum wlr_direction dir);
+static Client *droptarget(Client *c, Monitor *m, int *dir);
 static void droptile(Client *c);
 static void focusclient(Client *c, LayerSurface *l, int lift);
 static void focusdir(const Arg *arg);
@@ -384,6 +385,7 @@ static void togglemaximizescreen(const Arg *arg);
 static void unlocksession(struct wl_listener *listener, void *data);
 static void unmaplayersurfacenotify(struct wl_listener *listener, void *data);
 static void unmapnotify(struct wl_listener *listener, void *data);
+static void updatedroparea(void);
 static void updatemons(struct wl_listener *listener, void *data);
 static void updateappid(struct wl_listener *listener, void *data);
 static void updatetitle(struct wl_listener *listener, void *data);
@@ -445,6 +447,7 @@ static struct wlr_xcursor_manager *cursor_mgr;
 static struct wlr_scene_rect *root_bg;
 static struct wlr_session_lock_manager_v1 *session_lock_mgr;
 static struct wlr_scene_rect *locked_bg;
+static struct wlr_scene_rect *droparea;
 static struct wlr_session_lock_v1 *cur_lock;
 
 static struct wlr_seat *seat;
@@ -761,6 +764,7 @@ buttonpress(struct wl_listener *listener, void *data)
 		/* If you released any buttons, we exit interactive move/resize mode. */
 		if (!locked && cursor_mode != CurNormal && cursor_mode != CurPressed) {
 			cursor_mode = CurNormal;
+			wlr_scene_node_set_enabled(&droparea->node, 0);
 			/* Update the cursor */
 			wlr_seat_pointer_clear_focus(seat);
 			motionnotify(0, NULL, 0, 0, 0, 0);
@@ -1614,20 +1618,15 @@ dirtomon(enum wlr_direction dir)
 	return selmon;
 }
 
-void
-droptile(Client *c)
+Client *
+droptarget(Client *c, Monitor *m, int *dir)
 {
-	/* Tile c again next to the tiled window under or nearest the cursor, on
-	 * the side of that window's nearest edge: a new column left or right of
-	 * it, or above or below it in its column. Tile: before or after it. */
-	Monitor *m = c->mon;
+	/* The tiled window on m under or nearest the cursor, and the side of
+	 * its edge nearest the cursor */
 	Client *t, *near = NULL;
 	long d, best = LONG_MAX;
 	double rx, ry;
-	int dir, before, newcol;
 
-	if (!VISIBLEON(c, m)) /* the view changed mid-drag */
-		c->tags = m->tagset[m->seltags];
 	wl_list_for_each(t, &clients, link) {
 		if (t == c || !VISIBLEON(t, m) || t->isfloating || t->isfullscreen)
 			continue;
@@ -1644,19 +1643,35 @@ droptile(Client *c)
 			best = d;
 		}
 	}
-	if (!near) {
-		setfloating(c, 0);
-		return;
-	}
+	if (!near)
+		return NULL;
 
 	rx = cursor->x - near->geom.x;
 	ry = cursor->y - near->geom.y;
 	if (rx <= near->geom.width - rx && rx <= ry && rx <= near->geom.height - ry)
-		dir = WLR_DIRECTION_LEFT;
+		*dir = WLR_DIRECTION_LEFT;
 	else if (near->geom.width - rx <= ry && near->geom.width - rx <= near->geom.height - ry)
-		dir = WLR_DIRECTION_RIGHT;
+		*dir = WLR_DIRECTION_RIGHT;
 	else
-		dir = ry <= near->geom.height - ry ? WLR_DIRECTION_UP : WLR_DIRECTION_DOWN;
+		*dir = ry <= near->geom.height - ry ? WLR_DIRECTION_UP : WLR_DIRECTION_DOWN;
+	return near;
+}
+
+void
+droptile(Client *c)
+{
+	/* Tile c again next to its drop target: a new column left or right of
+	 * it, or above or below it in its column. Tile: before or after it. */
+	Monitor *m = c->mon;
+	Client *t, *near;
+	int dir, before, newcol;
+
+	if (!VISIBLEON(c, m)) /* the view changed mid-drag */
+		c->tags = m->tagset[m->seltags];
+	if (!(near = droptarget(c, m, &dir))) {
+		setfloating(c, 0);
+		return;
+	}
 	before = dir == WLR_DIRECTION_LEFT || dir == WLR_DIRECTION_UP;
 
 	if (LAYOUT(m)->arrange == scroller) {
@@ -1680,6 +1695,33 @@ droptile(Client *c)
 		wl_list_insert(before ? near->link.prev : &near->link, &c->link);
 	}
 	setfloating(c, 0);
+}
+
+void
+updatedroparea(void)
+{
+	/* Show the half of the drop target the dragged window will take */
+	Monitor *m = xytomon(cursor->x, cursor->y);
+	Client *t;
+	struct wlr_box b;
+	int dir;
+
+	if (!m || !(t = droptarget(grabc, m, &dir))) {
+		wlr_scene_node_set_enabled(&droparea->node, 0);
+		return;
+	}
+	b = t->geom;
+	if (dir == WLR_DIRECTION_LEFT || dir == WLR_DIRECTION_RIGHT)
+		b.width /= 2;
+	else
+		b.height /= 2;
+	b.x += dir == WLR_DIRECTION_RIGHT ? t->geom.width - b.width : 0;
+	b.y += dir == WLR_DIRECTION_DOWN ? t->geom.height - b.height : 0;
+	wlr_box_intersection(&b, &b, &m->m);
+	wlr_scene_node_set_position(&droparea->node, b.x, b.y);
+	wlr_scene_rect_set_size(droparea, b.width, b.height);
+	wlr_scene_node_raise_to_top(&droparea->node);
+	wlr_scene_node_set_enabled(&droparea->node, 1);
 }
 
 void
@@ -2221,6 +2263,8 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 			ny = selmon->w.y + selmon->w.height - grabc->geom.height;
 		resize(grabc, (struct wlr_box){.x = nx, .y = ny,
 			.width = grabc->geom.width, .height = grabc->geom.height}, 1);
+		if (grabtile)
+			updatedroparea();
 		return;
 	} else if (cursor_mode == CurResize && !grabc->isfloating) {
 		/* Not on internal calls: resizetiled() arranges, which calls us */
@@ -3284,6 +3328,8 @@ setup(void)
 	locked_bg = wlr_scene_rect_create(layers[LyrBlock], sgeom.width, sgeom.height,
 			(float [4]){0.1f, 0.1f, 0.1f, 1.0f});
 	wlr_scene_node_set_enabled(&locked_bg->node, 0);
+	droparea = wlr_scene_rect_create(layers[LyrTile], 0, 0, dropcolor);
+	wlr_scene_node_set_enabled(&droparea->node, 0);
 
 	foreign_toplevel_list = wlr_ext_foreign_toplevel_list_v1_create(dpy,1);
 	ext_foreign_toplevel_image_capture_source_manager_v1 =
@@ -3643,6 +3689,7 @@ unmapnotify(struct wl_listener *listener, void *data)
 	if (c == grabc) {
 		cursor_mode = CurNormal;
 		grabc = NULL;
+		wlr_scene_node_set_enabled(&droparea->node, 0);
 	}
 	if (c == focused_client)
 		focused_client = NULL;
