@@ -347,6 +347,8 @@ static void requestdecorationmode(struct wl_listener *listener, void *data);
 static void requeststartdrag(struct wl_listener *listener, void *data);
 static void requestmonstate(struct wl_listener *listener, void *data);
 static void resize(Client *c, struct wlr_box geo, int interact);
+static void resizecolumn(Client *sel, float p, int hgt);
+static void resizetiled(int dx, int dy);
 static void resizewin(const Arg *arg);
 static void scroller(Monitor *m);
 static int rulematches(Client *c, const Rule *r);
@@ -449,6 +451,8 @@ static KeyboardGroup *kb_group;
 static unsigned int cursor_mode;
 static Client *grabc;
 static int grabcx, grabcy; /* client-relative */
+static struct wlr_box grabgeom; /* tiled resize: geometry and size share at grab */
+static float grabp;
 
 static struct wlr_output_layout *output_layout;
 static struct wlr_box sgeom;
@@ -760,7 +764,8 @@ buttonpress(struct wl_listener *listener, void *data)
 			motionnotify(0, NULL, 0, 0, 0, 0);
 			/* Drop the window off on its new monitor */
 			selmon = xytomon(cursor->x, cursor->y);
-			setmon(grabc, selmon, 0);
+			if (grabc->isfloating)
+				setmon(grabc, selmon, 0);
 			grabc = NULL;
 			return;
 		}
@@ -2145,6 +2150,12 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 		resize(grabc, (struct wlr_box){.x = nx, .y = ny,
 			.width = grabc->geom.width, .height = grabc->geom.height}, 1);
 		return;
+	} else if (cursor_mode == CurResize && !grabc->isfloating) {
+		/* Not on internal calls: resizetiled() arranges, which calls us */
+		if (time)
+			resizetiled((int)round(cursor->x) - grabgeom.x - grabcx,
+					(int)round(cursor->y) - grabgeom.y - grabcy);
+		return;
 	} else if (cursor_mode == CurResize) {
 		resize(grabc, (struct wlr_box){.x = grabc->geom.x, .y = grabc->geom.y,
 			.width = (int)round(cursor->x) - grabc->geom.x, .height = (int)round(cursor->y) - grabc->geom.y}, 1);
@@ -2181,8 +2192,18 @@ moveresize(const Arg *arg)
 	if (cursor_mode != CurNormal && cursor_mode != CurPressed)
 		return;
 	xytonode(cursor->x, cursor->y, NULL, &grabc, NULL, NULL, NULL);
-	if (!grabc || grabc->isfullscreen)
+	if (!grabc || grabc->isfullscreen || grabc->ismaximized)
 		return;
+
+	if (arg->ui == CurResize && !grabc->isfloating) {
+		cursor_mode = CurResize;
+		grabcx = (int)round(cursor->x) - grabc->geom.x;
+		grabcy = (int)round(cursor->y) - grabc->geom.y;
+		grabgeom = grabc->geom;
+		grabp = LAYOUT(grabc->mon)->arrange == tile ? grabc->mon->mfact : grabc->proportion;
+		wlr_cursor_set_xcursor(cursor, cursor_mgr, "grab");
+		return;
+	}
 
 	/* Float the window and tell motionnotify to grab it */
 	setfloating(grabc, 1);
@@ -2589,8 +2610,7 @@ resizewin(const Arg *arg)
 	 * the window's share of its column. Tile: dx moves the master split. */
 	const int *d = arg->v;
 	Client *c, *sel = focustop(selmon);
-	float p, sum = 0;
-	int i = 0, master = 0, rows = 0, hgt;
+	int i = 0, master = 0;
 
 	if (!sel || sel->isfullscreen || sel->ismaximized)
 		return;
@@ -2610,21 +2630,51 @@ resizewin(const Arg *arg)
 		setmfact(&(Arg){.f = (master ? d[0] : -d[0]) / (float)selmon->w.width});
 		return;
 	}
-	if (LAYOUT(selmon)->arrange != scroller)
-		return;
-	p = MAX(0.1f, MIN(1.0f, sel->proportion + d[0] / (float)selmon->w.width));
+	if (LAYOUT(selmon)->arrange == scroller)
+		resizecolumn(sel, sel->proportion + d[0] / (float)selmon->w.width,
+				sel->geom.height + d[1]);
+}
+
+void
+resizecolumn(Client *sel, float p, int hgt)
+{
+	/* Set sel's column to width share p and sel to height hgt within it */
+	Monitor *m = sel->mon;
+	Client *c;
+	float sum = 0;
+	int rows = 0;
+
+	p = MAX(0.1f, MIN(1.0f, p));
 	wl_list_for_each(c, &clients, link) {
-		if (!VISIBLEON(c, selmon) || c->isfloating || c->column != sel->column)
+		if (!VISIBLEON(c, m) || c->isfloating || c->column != sel->column)
 			continue;
 		c->proportion = p;
 		sum += c->cfact;
 		rows++;
 	}
-	if (rows > 1 && d[1]) {
-		hgt = MAX(selmon->w.height / 10, MIN(selmon->w.height * 9 / 10, sel->geom.height + d[1]));
-		sel->cfact = hgt * (sum - sel->cfact) / (selmon->w.height - hgt);
+	if (rows > 1 && hgt != sel->geom.height) {
+		hgt = MAX(m->w.height / 10, MIN(m->w.height * 9 / 10, hgt));
+		sel->cfact = hgt * (sum - sel->cfact) / (m->w.height - hgt);
 	}
-	arrange(selmon);
+	arrange(m);
+}
+
+void
+resizetiled(int dx, int dy)
+{
+	/* Super+right-drag on a tiled window. Scroller: grow towards the cursor
+	 * from the half the window was grabbed in, like mango. Tile: move the
+	 * master split. */
+	Monitor *m = grabc->mon;
+
+	if (LAYOUT(m)->arrange == tile) {
+		m->mfact = MAX(0.1f, MIN(0.9f, grabp + dx / (float)m->w.width));
+		arrange(m);
+	} else if (LAYOUT(m)->arrange == scroller) {
+		resizecolumn(grabc, grabp + (grabcx < grabgeom.width / 2 ? -dx : dx)
+				/ (float)m->w.width,
+				grabgeom.height + (grabcy < grabgeom.height / 2 ? -dy : dy));
+	}
 }
 
 int
