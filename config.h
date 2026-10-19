@@ -33,7 +33,18 @@ static const Rule rules[] = {
 	{ .id = "^dev\\.noctalia\\.Noctalia$", .isfloating = 1, .width = 1080, .height = 920 },
 	{ .id = "^steam$", .title = "^notificationtoasts_[0-9]+_desktop$",
 	  .isfloating = 1, .nofocus = 1, .offx = 100, .offy = 100 },
-	/* TODO phase 3: named scratchpads; phase 4: game rules (DESIGN.md 6.7, 6.8) */
+	/* TODO phase 4: game rules (DESIGN.md 6.7, 6.8) */
+};
+
+/* Named scratchpads (DESIGN.md 6.6): floating overlay windows, toggled by
+ * key or by mywmctl dispatch toggle_scratchpad <name> */
+static const int scratchpad_width = 1792, scratchpad_height = 1152;
+static const Scratchpad scratchpads[] = {
+	/* name      app_id regex                  title regex            command */
+	{ "notes",   "^md\\.obsidian\\.Obsidian$", NULL,                  "obsidian" },
+	{ "term",    "^scratch-term$",             NULL,                  "alacritty --class scratch-term" },
+	{ "vscode",  "^com\\.microsoft\\.VSCode$", "VS Code Scratchpad$",
+		"code --user-data-dir ~/.local/share/code-scratchpad --new-window" },
 };
 
 /* layout(s) */
@@ -138,7 +149,9 @@ static const Key keys[] = {
 	{ MODKEY|SHIFTKEY,     XKB_KEY_g,            spawn,                BIN("game-session --single-monitor") },
 	{ MODKEY,              XKB_KEY_space,        spawn,                NOCTALIA("panel-toggle launcher") },
 	{ MODKEY,              XKB_KEY_s,            spawn,                NOCTALIA("panel-toggle control-center") },
-	/* TODO phase 3: Super+N, Super+\ and Super+C toggle built-in scratchpads (DESIGN.md 6.6) */
+	{ MODKEY,              XKB_KEY_n,            togglescratch,        {.v = &scratchpads[0]} },
+	{ MODKEY,              XKB_KEY_backslash,    togglescratch,        {.v = &scratchpads[1]} },
+	{ MODKEY,              XKB_KEY_c,            togglescratch,        {.v = &scratchpads[2]} },
 	{ MODKEY,              XKB_KEY_v,            spawn,                NOCTALIA("panel-toggle clipboard") },
 	{ MODKEY,              XKB_KEY_y,            spawn,                NOCTALIA("panel-toggle wallpaper") },
 	{ MODKEY,              XKB_KEY_comma,        spawn,                NOCTALIA("settings-toggle") },

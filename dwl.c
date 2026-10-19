@@ -93,8 +93,8 @@
 /* enums */
 enum { CurNormal, CurPressed, CurMove, CurResize }; /* cursor */
 enum { XDGShell, LayerShell }; /* client types */
-enum { LyrBg, LyrBottom, LyrTile, LyrFloat, LyrTop, LyrFS, LyrOverlay,
-	LyrIMPopup, LyrBlock, NUM_LAYERS }; /* scene layers */
+enum { LyrBg, LyrBottom, LyrTile, LyrFloat, LyrTop, LyrFS, LyrAboveFS, LyrOverlay,
+	LyrIMPopup, LyrBlock, NUM_LAYERS }; /* scene layers; LyrAboveFS: overlay windows */
 enum { AxisUp, AxisRight, AxisDown, AxisLeft };
 
 typedef union {
@@ -117,6 +117,13 @@ typedef struct {
 	void (*func)(const Arg *);
 	const Arg arg;
 } Button;
+
+typedef struct {
+	const char *name;  /* for IPC */
+	const char *id;    /* app_id regex */
+	const char *title; /* title regex, NULL matches anything */
+	const char *cmd;   /* shell command that opens it */
+} Scratchpad;
 
 typedef struct Monitor Monitor;
 typedef struct {
@@ -161,6 +168,8 @@ typedef struct {
 	unsigned int bw, id; /* id: for IPC, never reused */
 	uint32_t tags;
 	int isfloating, isurgent, isfullscreen, ismaximized;
+	int isoverlay; /* drawn above fullscreen windows */
+	const Scratchpad *scratchpad; /* claimed by it; hidden while tags is 0 */
 	uint32_t rulesdone; /* rules already applied, bit per rule */
 	int column, row; /* scroller position on its tag, column -1 means unplaced */
 	float proportion, cfact; /* column width share, height weight in column */
@@ -286,6 +295,7 @@ static void checkidleinhibitor(struct wlr_surface *exclude);
 static void cleanup(void);
 static void cleanupmon(struct wl_listener *listener, void *data);
 static void cleanuplisteners(void);
+static struct wlr_scene_tree *clientlayer(Client *c);
 static void closemon(Monitor *m);
 static void commitlayersurfacenotify(struct wl_listener *listener, void *data);
 static void commitlocksurface(struct wl_listener *listener, void *data);
@@ -370,6 +380,7 @@ static void resizewin(const Arg *arg);
 static void scroller(Monitor *m);
 static int cmpcolumn(const void *a, const void *b);
 static int rulematches(Client *c, const Rule *r);
+static int rulematchre(Client *c, regex_t re[2], const char *id, const char *title);
 static void run(char *startup_cmd);
 static int satelliteexit(int fd, uint32_t mask, void *data);
 static int satellitespawn(void *data);
@@ -384,6 +395,7 @@ static void setmon(Client *c, Monitor *m, uint32_t newtags);
 static void setpsel(struct wl_listener *listener, void *data);
 static void setsel(struct wl_listener *listener, void *data);
 static void setup(void);
+static void showscratch(Client *c);
 static void spawn(const Arg *arg);
 static void startdrag(struct wl_listener *listener, void *data);
 static void stackinto(const Arg *arg);
@@ -400,6 +412,7 @@ static void toplevelclose(struct wl_listener *listener, void *data);
 static void toplevelfullscreen(struct wl_listener *listener, void *data);
 static void toplevelmaximize(struct wl_listener *listener, void *data);
 static void togglefloating(const Arg *arg);
+static void togglescratch(const Arg *arg);
 static void togglefullscreen(const Arg *arg);
 static void togglemaximizescreen(const Arg *arg);
 static void unlocksession(struct wl_listener *listener, void *data);
@@ -527,6 +540,7 @@ static struct wl_listener workspace_commit = {.notify = workspacecommit};
 
 _Static_assert(LENGTH(rules) <= 32, "Client.rulesdone has one bit per rule");
 static regex_t ruleregex[LENGTH(rules)][2]; /* app_id, title */
+static regex_t scratchregex[LENGTH(scratchpads)][2];
 
 /* attempt to encapsulate suck into one file */
 #include "client.h"
@@ -575,6 +589,7 @@ applyrules(Client *c)
 	const Rule *r;
 	Monitor *mon = selmon, *m;
 	int w = 0, h = 0, offx = 0, offy = 0, nofocus = 0;
+	size_t i;
 
 	c->rulesdone = 0;
 	for (r = rules; r < END(rules); r++) {
@@ -594,13 +609,19 @@ applyrules(Client *c)
 	}
 
 	c->isfloating |= client_is_float_type(c);
+	for (i = 0; !c->scratchpad && i < LENGTH(scratchpads); i++)
+		if (rulematchre(c, scratchregex[i], scratchpads[i].id, scratchpads[i].title))
+			c->scratchpad = &scratchpads[i];
+	c->isfloating |= c->isoverlay = c->scratchpad != NULL;
 	/* Below everything in the focus stack, so setmon() won't focus it */
 	if (nofocus && client_surface(c)->mapped) {
 		wl_list_remove(&c->flink);
 		wl_list_insert(fstack.prev, &c->flink);
 	}
 	setmon(c, mon, newtags);
-	if (c->isfloating && c->mon)
+	if (c->scratchpad && c->mon && client_surface(c)->mapped)
+		showscratch(c);
+	else if (c->isfloating && c->mon)
 		placefloating(c, &c->mon->w, w, h, offx, offy);
 }
 
@@ -622,15 +643,19 @@ arrange(Monitor *m)
 		}
 	}
 
+	/* An overlay window over a fullscreen one keeps the background */
+	wl_list_for_each(c, &fstack, flink)
+		if (VISIBLEON(c, m) && !c->isoverlay)
+			break;
 	wlr_scene_node_set_enabled(&m->fullscreen_bg->node,
-			(c = focustop(m)) && c->isfullscreen);
+			&c->flink != &fstack && c->isfullscreen);
 
 	strncpy(m->ltsymbol, LAYOUT(m)->symbol, LENGTH(m->ltsymbol));
 
 	/* We move all clients (except fullscreen) to LyrTile while
 	 * in floating layout to avoid "real" floating clients be always on top */
 	wl_list_for_each(c, &clients, link) {
-		if (c->mon != m || c->scene->node.parent == layers[LyrFS])
+		if (c->mon != m || c->scene->node.parent == layers[LyrFS] || c->isoverlay)
 			continue;
 
 		wlr_scene_node_reparent(&c->scene->node,
@@ -949,6 +974,16 @@ cleanuplisteners(void)
 	wl_list_remove(&new_session_lock.link);
 	wl_list_remove(&new_foreign_toplevel_capture_request.link);
 	wl_list_remove(&workspace_commit.link);
+}
+
+struct wlr_scene_tree *
+clientlayer(Client *c)
+{
+	/* Dialogs share their parent's layer above the tiles */
+	Client *p = client_get_parent(c);
+	return layers[c->isoverlay || (p && p->isoverlay) ? LyrAboveFS
+			: c->isfullscreen || (p && p->isfullscreen) ? LyrFS
+			: c->isfloating || c->ismaximized ? LyrFloat : LyrTile];
 }
 
 void
@@ -2211,6 +2246,8 @@ mapnotify(struct wl_listener *listener, void *data)
 
 	m = c->mon ? c->mon : xytomon(c->geom.x, c->geom.y);
 	wl_list_for_each(w, &clients, link) {
+		if (c->isoverlay)
+			break;
 		if (w != c && w != p && w->isfullscreen && m == w->mon && (w->tags & c->tags))
 			setfullscreen(w, 0);
 		if (w != c && w != p && w->ismaximized && m == w->mon && (w->tags & c->tags))
@@ -2719,9 +2756,19 @@ reapplyrules(Client *c)
 	 * Proton naming its game window late. Each rule applies once. */
 	const Rule *r;
 	Monitor *m;
+	size_t i;
 
 	if (!c->mon || !client_surface(c)->mapped)
 		return;
+	/* Scratchpads that set their title late, like a second VS Code */
+	for (i = 0; !c->scratchpad && i < LENGTH(scratchpads); i++) {
+		if (!rulematchre(c, scratchregex[i], scratchpads[i].id, scratchpads[i].title))
+			continue;
+		c->scratchpad = &scratchpads[i];
+		c->isoverlay = 1;
+		setfloating(c, 1);
+		showscratch(c);
+	}
 	for (r = rules; r < END(rules); r++) {
 		if ((c->rulesdone & (1u << (r - rules))) || !rulematches(c, r))
 			continue;
@@ -2916,9 +2963,14 @@ resizetiled(int dx, int dy)
 int
 rulematches(Client *c, const Rule *r)
 {
-	regex_t *re = ruleregex[r - rules];
-	return (!r->id || !regexec(&re[0], client_get_appid(c), 0, NULL, 0))
-			&& (!r->title || !regexec(&re[1], client_get_title(c), 0, NULL, 0));
+	return rulematchre(c, ruleregex[r - rules], r->id, r->title);
+}
+
+int
+rulematchre(Client *c, regex_t re[2], const char *id, const char *title)
+{
+	return (!id || !regexec(&re[0], client_get_appid(c), 0, NULL, 0))
+			&& (!title || !regexec(&re[1], client_get_title(c), 0, NULL, 0));
 }
 
 void
@@ -3191,7 +3243,6 @@ setcursorshape(struct wl_listener *listener, void *data)
 void
 setfloating(Client *c, int floating)
 {
-	Client *p = client_get_parent(c);
 	struct wlr_box b;
 	int was = c->isfloating;
 
@@ -3201,9 +3252,7 @@ setfloating(Client *c, int floating)
 	/* If in floating layout do not change the client's layer */
 	if (!c->mon || !client_surface(c)->mapped || !LAYOUT(c->mon)->arrange)
 		return;
-	wlr_scene_node_reparent(&c->scene->node, layers[c->isfullscreen ||
-			(p && p->isfullscreen) ? LyrFS
-			: c->isfloating || c->ismaximized ? LyrFloat : LyrTile]);
+	wlr_scene_node_reparent(&c->scene->node, clientlayer(c));
 	/* Back to where it last floated, as in mango; recentred when that is
 	 * off this monitor or too big for it */
 	if (floating && !was && !c->isfullscreen && c->floatgeom.width > 0) {
@@ -3231,8 +3280,7 @@ setfullscreen(Client *c, int fullscreen)
 	client_set_fullscreen(c, fullscreen);
 	if (c->toplevel_handle)
 		wlr_foreign_toplevel_handle_v1_set_fullscreen(c->toplevel_handle, fullscreen);
-	wlr_scene_node_reparent(&c->scene->node, layers[c->isfullscreen
-			? LyrFS : c->isfloating || c->ismaximized ? LyrFloat : LyrTile]);
+	wlr_scene_node_reparent(&c->scene->node, clientlayer(c));
 
 	if (fullscreen) {
 		c->prev = c->geom;
@@ -3288,8 +3336,7 @@ setmaximized(Client *c, int maximized)
 	client_set_maximized(c, maximized);
 	if (c->toplevel_handle)
 		wlr_foreign_toplevel_handle_v1_set_maximized(c->toplevel_handle, maximized);
-	wlr_scene_node_reparent(&c->scene->node, layers[maximized || c->isfloating
-			? LyrFloat : LyrTile]);
+	wlr_scene_node_reparent(&c->scene->node, clientlayer(c));
 	if (maximized) {
 		c->prev = c->geom;
 		resize(c, c->mon->w, 0);
@@ -3335,7 +3382,8 @@ setmon(Client *c, Monitor *m, uint32_t newtags)
 	if (m) {
 		/* Make sure window actually overlaps with the monitor */
 		resize(c, c->geom, 0);
-		c->tags = newtags ? newtags : m->tagset[m->seltags]; /* assign tags of target monitor */
+		/* assign tags of target monitor; hidden scratchpads stay hidden */
+		c->tags = newtags ? newtags : c->scratchpad && !c->tags ? 0 : m->tagset[m->seltags];
 		setfullscreen(c, c->isfullscreen); /* This will call arrange(c->mon) */
 		setfloating(c, c->isfloating);
 	}
@@ -3376,6 +3424,12 @@ setup(void)
 		if ((rules[r].id && regcomp(&ruleregex[r][0], rules[r].id, REG_EXTENDED | REG_NOSUB))
 				|| (rules[r].title && regcomp(&ruleregex[r][1], rules[r].title, REG_EXTENDED | REG_NOSUB)))
 			die("invalid regex in rules[%zu]", r);
+	}
+	for (r = 0; r < LENGTH(scratchpads); r++) {
+		if (regcomp(&scratchregex[r][0], scratchpads[r].id, REG_EXTENDED | REG_NOSUB)
+				|| (scratchpads[r].title && regcomp(&scratchregex[r][1],
+						scratchpads[r].title, REG_EXTENDED | REG_NOSUB)))
+			die("invalid regex in scratchpads[%zu]", r);
 	}
 
 	for (i = 0; i < (int)LENGTH(sig); i++)
@@ -3597,6 +3651,27 @@ setup(void)
 	/* Make sure clients don't connect to the parent X server, e.g. when
 	 * running nested in a session that has one */
 	unsetenv("DISPLAY");
+}
+
+void
+showscratch(Client *c)
+{
+	/* Onto its monitor's current tag, centred and focused, hiding any other
+	 * scratchpad there (mango's single_scratchpad) */
+	Monitor *m = c->mon;
+	Client *o;
+
+	wl_list_for_each(o, &clients, link)
+		if (o != c && o->scratchpad && VISIBLEON(o, m))
+			o->tags = 0;
+	c->tags = m->tagset[m->seltags];
+	wlr_scene_node_reparent(&c->scene->node, clientlayer(c));
+	placefloating(c, &m->w, MIN(scratchpad_width, m->w.width),
+			MIN(scratchpad_height, m->w.height), 0, 0);
+	arrange(m);
+	focusclient(c, NULL, 1);
+	warpto(&c->geom);
+	printstatus();
 }
 
 void
@@ -3826,7 +3901,9 @@ toplevelactivate(struct wl_listener *listener, void *data)
 	if (!c->mon)
 		return;
 	selmon = c->mon;
-	if (!VISIBLEON(c, c->mon))
+	if (c->scratchpad && !VISIBLEON(c, c->mon))
+		showscratch(c);
+	else if (!VISIBLEON(c, c->mon))
 		view(&(Arg){.ui = c->tags});
 	focusclient(c, NULL, 1);
 	warpto(&c->geom);
@@ -3871,6 +3948,30 @@ togglefullscreen(const Arg *arg)
 	Client *sel = focustop(selmon);
 	if (sel)
 		setfullscreen(sel, !sel->isfullscreen);
+}
+
+void
+togglescratch(const Arg *arg)
+{
+	/* Hide the scratchpad if it shows on its monitor, else show it there;
+	 * open it if it doesn't exist */
+	const Scratchpad *sp = arg->v;
+	Client *c;
+
+	wl_list_for_each(c, &clients, link) {
+		if (c->scratchpad != sp)
+			continue;
+		if (VISIBLEON(c, c->mon)) {
+			c->tags = 0;
+			arrange(c->mon);
+			focusclient(focustop(selmon), NULL, 1);
+			printstatus();
+		} else {
+			showscratch(c);
+		}
+		return;
+	}
+	spawn(&(Arg){.v = (const char *[]){ "/bin/sh", "-c", sp->cmd, NULL }});
 }
 
 void
@@ -4097,7 +4198,9 @@ urgent(struct wl_listener *listener, void *data)
 	if (focusonactivate && c->mon && client_surface(c)->mapped
 			&& !(sel && sel->isfullscreen)) {
 		selmon = c->mon;
-		if (!VISIBLEON(c, c->mon))
+		if (c->scratchpad && !VISIBLEON(c, c->mon))
+			showscratch(c);
+		else if (!VISIBLEON(c, c->mon))
 			view(&(Arg){.ui = c->tags});
 		focusclient(c, NULL, 1);
 		return;

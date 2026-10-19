@@ -23,7 +23,7 @@ typedef struct {
 	Buf out;
 } IpcClient;
 
-enum { ActNone, ActTag, ActDir, ActDelta, ActCmd }; /* argument types */
+enum { ActNone, ActTag, ActDir, ActDelta, ActCmd, ActScratch }; /* argument types */
 
 typedef struct {
 	const char *name;
@@ -34,26 +34,27 @@ typedef struct {
 
 /* Keybind actions by name, DESIGN.md 10 */
 static const Action actions[] = {
-	{ "view",                 view,                  ActTag,   {0} },
-	{ "send_to_tag",          tag,                   ActTag,   {0} },
-	{ "view_prev",            viewadj,               ActNone,  {.i = -1} },
-	{ "view_next",            viewadj,               ActNone,  {.i = +1} },
-	{ "send_to_prev_tag",     tagadj,                ActNone,  {.i = -1} },
-	{ "send_to_next_tag",     tagadj,                ActNone,  {.i = +1} },
-	{ "focus",                focusdir,              ActDir,   {0} },
-	{ "swap",                 swapdir,               ActDir,   {0} },
-	{ "stack_into",           stackinto,             ActDir,   {0} },
-	{ "cycle_width",          cyclewidth,            ActNone,  {0} },
-	{ "togglefullscreen",     togglefullscreen,      ActNone,  {0} },
-	{ "togglemaximizescreen", togglemaximizescreen,  ActNone,  {0} },
-	{ "togglefloating",       togglefloating,        ActNone,  {0} },
-	{ "resize",               resizewin,             ActDelta, {0} },
-	{ "cycle_layout",         cyclelayout,           ActNone,  {0} },
-	{ "close",                killclient,            ActNone,  {0} },
-	{ "focus_output",         focusmon,              ActDir,   {0} },
-	{ "send_to_output",       tagmon,                ActDir,   {0} },
-	{ "spawn",                spawn,                 ActCmd,   {0} },
-	{ "quit",                 quit,                  ActNone,  {0} },
+	{ "view",                 view,                  ActTag,     {0} },
+	{ "send_to_tag",          tag,                   ActTag,     {0} },
+	{ "view_prev",            viewadj,               ActNone,    {.i = -1} },
+	{ "view_next",            viewadj,               ActNone,    {.i = +1} },
+	{ "send_to_prev_tag",     tagadj,                ActNone,    {.i = -1} },
+	{ "send_to_next_tag",     tagadj,                ActNone,    {.i = +1} },
+	{ "focus",                focusdir,              ActDir,     {0} },
+	{ "swap",                 swapdir,               ActDir,     {0} },
+	{ "stack_into",           stackinto,             ActDir,     {0} },
+	{ "cycle_width",          cyclewidth,            ActNone,    {0} },
+	{ "togglefullscreen",     togglefullscreen,      ActNone,    {0} },
+	{ "togglemaximizescreen", togglemaximizescreen,  ActNone,    {0} },
+	{ "togglefloating",       togglefloating,        ActNone,    {0} },
+	{ "resize",               resizewin,             ActDelta,   {0} },
+	{ "cycle_layout",         cyclelayout,           ActNone,    {0} },
+	{ "close",                killclient,            ActNone,    {0} },
+	{ "focus_output",         focusmon,              ActDir,     {0} },
+	{ "send_to_output",       tagmon,                ActDir,     {0} },
+	{ "spawn",                spawn,                 ActCmd,     {0} },
+	{ "toggle_scratchpad",    togglescratch,         ActScratch, {0} },
+	{ "quit",                 quit,                  ActNone,    {0} },
 };
 
 static int animations = 1; /* no-op until phase 5 */
@@ -138,11 +139,13 @@ bclient(Buf *b, Client *c)
 	bstr(b, c->mon ? c->mon->wlr_output->name : NULL);
 	bprintf(b, ",\"tag\":%d,\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d,"
 			"\"floating\":%s,\"fullscreen\":%s,\"maximized\":%s,\"urgent\":%s,"
-			"\"visible\":%s,\"focused\":%s}",
+			"\"visible\":%s,\"focused\":%s,\"overlay\":%s,\"scratchpad\":",
 			tagnum(c->tags), c->geom.x, c->geom.y, c->geom.width, c->geom.height,
 			JBOOL(c->isfloating), JBOOL(c->isfullscreen), JBOOL(c->ismaximized),
 			JBOOL(c->isurgent), JBOOL(VISIBLEON(c, c->mon)),
-			JBOOL(selmon && c == focustop(selmon)));
+			JBOOL(selmon && c == focustop(selmon)), JBOOL(c->isoverlay));
+	bstr(b, c->scratchpad ? c->scratchpad->name : NULL);
+	bputs(b, "}");
 }
 
 static void
@@ -518,6 +521,13 @@ ipcdispatch(int argc, char **argv)
 		}
 		sh[2] = cmd.s;
 		arg.v = sh;
+		break;
+	case ActScratch:
+		for (i = 0; argc == 2 && i < (int)LENGTH(scratchpads)
+				&& strcmp(scratchpads[i].name, argv[1]); i++);
+		if (argc != 2 || i == (int)LENGTH(scratchpads))
+			return "expected a scratchpad name";
+		arg.v = &scratchpads[i];
 		break;
 	}
 	a->func(&arg);
