@@ -21,6 +21,10 @@ static const float fullscreen_bg[]         = {0.0f, 0.0f, 0.0f, 1.0f}; /* You ca
 /* animations in ms, mango's durations; never on game windows */
 static const int animmove                  = 250;
 static const int animtag                   = 250; /* slides vertically */
+static const int animopen                  = 150; /* zoom and fade */
+static const int animclose                 = 150;
+static const float animzoomin              = 0.3f; /* opens from this size */
+static const float animzoomout             = 0.8f; /* closes to this size */
 
 /* tagging - TAGCOUNT must be no greater than 31 */
 #define TAGCOUNT (9)

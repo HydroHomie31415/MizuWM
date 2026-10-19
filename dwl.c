@@ -180,7 +180,17 @@ typedef struct {
 	int animdur; /* 0 when not moving */
 	int shown; /* visible at the last arrange; only those animate */
 	int hiding; /* sliding away to another tag */
+	struct wlr_scene_tree *proxy; /* drawn zooming in while it opens */
+	uint32_t openstart; /* ms */
 } Client;
+
+typedef struct {
+	struct wl_list link;
+	struct wlr_scene_tree *tmpl, *tree; /* a closed window's last frame, zooming out */
+	struct wlr_box box;
+	Monitor *mon;
+	uint32_t start; /* ms */
+} Ghost;
 
 typedef struct {
 	uint32_t mod;
@@ -340,11 +350,13 @@ static void destroynotify(struct wl_listener *listener, void *data);
 static void destroypointerconstraint(struct wl_listener *listener, void *data);
 static void destroysessionlock(struct wl_listener *listener, void *data);
 static void destroykeyboardgroup(struct wl_listener *listener, void *data);
+static void destroyghost(Ghost *g);
 static struct wlr_box dirbox(Client *c);
 static Client *dirclient(Client *sel, enum wlr_direction dir, int tiled);
 static Monitor *dirtomon(enum wlr_direction dir);
 static Client *droptarget(Client *c, Monitor *m, int *dir);
 static void droptile(Client *c);
+static float ease(float t);
 static void focusclient(Client *c, LayerSurface *l, int lift);
 static void focusdir(const Arg *arg);
 static void focusmon(const Arg *arg);
@@ -352,6 +364,7 @@ static Client *focustop(Monitor *m);
 static int fsontop(Client *c);
 static void hiddenframe(struct wlr_scene_buffer *buffer, int sx, int sy, void *data);
 static int hiddenframes(void *data);
+static void hidelive(struct wlr_scene_tree *t, int hide);
 static void fullscreennotify(struct wl_listener *listener, void *data);
 static void gpureset(struct wl_listener *listener, void *data);
 static void handlesig(int signo);
@@ -362,9 +375,12 @@ static void keypress(struct wl_listener *listener, void *data);
 static void keypressmod(struct wl_listener *listener, void *data);
 static int keyrepeat(void *data);
 static void killclient(const Arg *arg);
+static float liveopacity(struct wlr_scene_buffer *b);
 static void locksession(struct wl_listener *listener, void *data);
 static void mapnotify(struct wl_listener *listener, void *data);
 static void maximizenotify(struct wl_listener *listener, void *data);
+static void mirror(struct wlr_scene_tree *src, struct wlr_scene_tree *dst,
+		int x, int y, float s, float a);
 static const MonitorRule *monrule(struct wlr_output *o);
 static void monrulestate(struct wlr_output *o, const MonitorRule *r,
 		struct wlr_output_state *state);
@@ -373,6 +389,7 @@ static void motionnotify(uint32_t time, struct wlr_input_device *device, double 
 		double sy, double sx_unaccel, double sy_unaccel);
 static void motionrelative(struct wl_listener *listener, void *data);
 static void moveresize(const Arg *arg);
+static bool noinput(struct wlr_scene_buffer *b, double *sx, double *sy);
 static uint32_t nowms(void);
 static int openxdisplay(void);
 static int openxsocket(int n, int abstract);
@@ -452,6 +469,8 @@ static void workspacecommit(struct wl_listener *listener, void *data);
 static Monitor *xytomon(double x, double y);
 static void xytonode(double x, double y, struct wlr_surface **psurface,
 		Client **pc, LayerSurface **pl, double *nx, double *ny);
+static void zoom(struct wlr_scene_tree *src, struct wlr_scene_tree *dst,
+		struct wlr_box b, float s, float a);
 
 /* variables */
 static pid_t child_pid = -1;
@@ -483,6 +502,7 @@ static struct wlr_xdg_activation_v1 *activation;
 static struct wlr_xdg_decoration_manager_v1 *xdg_decoration_mgr;
 static struct wl_list clients; /* tiling order */
 static struct wl_list fstack;  /* focus order */
+static struct wl_list ghosts;
 static struct wlr_idle_notifier_v1 *idle_notifier;
 static struct wlr_idle_inhibit_manager_v1 *idle_inhibit_mgr;
 static struct wlr_layer_shell_v1 *layer_shell;
@@ -576,20 +596,50 @@ animate(Monitor *m)
 {
 	/* Called every frame; keeps frames coming while something moves */
 	Client *c;
+	Ghost *g, *tmp;
+	struct wlr_box b;
 	uint32_t now = nowms();
 	int busy = 0, done = 0;
+	float t;
 
 	wl_list_for_each(c, &clients, link) {
-		if (c->mon != m || !c->animdur)
+		if (c->mon != m || (!c->animdur && !c->proxy))
 			continue;
-		if (!animations || c->isgame || now - c->animstart >= (uint32_t)c->animdur) {
+		if (c->animdur && (!animations || c->isgame
+				|| now - c->animstart >= (uint32_t)c->animdur)) {
 			c->animdur = 0;
 			c->hiding = 0;
 			c->animto = c->geom;
 			done = 1;
 		}
-		busy |= c->animdur;
-		applygeom(c, animbox(c, now));
+		t = c->proxy ? (float)(now - c->openstart) / (float)animopen : 1;
+		if (c->proxy && (!animations || c->isgame || t >= 1)) {
+			wlr_scene_node_destroy(&c->proxy->node);
+			c->proxy = NULL;
+			hidelive(c->scene, 0);
+			done = 1;
+		}
+		busy |= c->animdur || c->proxy;
+		applygeom(c, b = animbox(c, now));
+		if (!c->proxy)
+			continue;
+		/* c->scene may have changed layer */
+		wlr_scene_node_reparent(&c->proxy->node, c->scene->node.parent);
+		wlr_scene_node_place_above(&c->proxy->node, &c->scene->node);
+		wlr_scene_node_set_enabled(&c->proxy->node, c->scene->node.enabled);
+		zoom(c->scene, c->proxy, b, animzoomin + (1 - animzoomin) * ease(t), ease(t));
+		hidelive(c->scene, 1);
+	}
+	wl_list_for_each_safe(g, tmp, &ghosts, link) {
+		if (g->mon != m)
+			continue;
+		t = (float)(now - g->start) / (float)animclose;
+		if (!animations || t >= 1) {
+			destroyghost(g);
+			continue;
+		}
+		zoom(g->tmpl, g->tree, g->box, 1 - (1 - animzoomout) * ease(t), 1 - ease(t));
+		busy = 1;
 	}
 	if (busy)
 		wlr_output_schedule_frame(m->wlr_output);
@@ -602,10 +652,8 @@ animbox(Client *c, uint32_t now)
 {
 	/* Where c is drawn now, easing out (cubic) */
 	struct wlr_box *a = &c->animfrom, *b = &c->animto;
-	float t = c->animdur ? (float)(now - c->animstart) / (float)c->animdur : 1;
+	float t = ease(c->animdur ? (float)(now - c->animstart) / (float)c->animdur : 1);
 
-	t = t < 1 ? 1 - t : 0;
-	t = 1 - t * t * t;
 	return (struct wlr_box){
 		.x = a->x + (int)lroundf((float)(b->x - a->x) * t),
 		.y = a->y + (int)lroundf((float)(b->y - a->y) * t),
@@ -1048,7 +1096,12 @@ cleanupmon(struct wl_listener *listener, void *data)
 {
 	Monitor *m = wl_container_of(listener, m, destroy);
 	LayerSurface *l, *tmp;
+	Ghost *g, *gtmp;
 	size_t i;
+
+	wl_list_for_each_safe(g, gtmp, &ghosts, link)
+		if (g->mon == m)
+			destroyghost(g);
 
 	/* m->layers[i] are intentionally not unlinked */
 	for (i = 0; i < LENGTH(m->layers); i++) {
@@ -1762,6 +1815,15 @@ destroysessionlock(struct wl_listener *listener, void *data)
 }
 
 void
+destroyghost(Ghost *g)
+{
+	wl_list_remove(&g->link);
+	wlr_scene_node_destroy(&g->tmpl->node);
+	wlr_scene_node_destroy(&g->tree->node);
+	free(g);
+}
+
+void
 destroykeyboardgroup(struct wl_listener *listener, void *data)
 {
 	KeyboardGroup *group = wl_container_of(listener, group, destroy);
@@ -1950,6 +2012,14 @@ updatedroparea(void)
 	wlr_scene_node_set_enabled(&droparea->node, 1);
 }
 
+float
+ease(float t)
+{
+	/* Cubic ease-out from 0 to 1 */
+	t = t < 1 ? 1 - t : 0;
+	return 1 - t * t * t;
+}
+
 void
 focusclient(Client *c, LayerSurface *l, int lift)
 {
@@ -2127,6 +2197,24 @@ hiddenframes(void *data)
 	if ((hidden_armed = refresh > 0))
 		wl_event_source_timer_update(hidden_timer, MAX(1, 1000000 / refresh));
 	return 0;
+}
+
+void
+hidelive(struct wlr_scene_tree *t, int hide)
+{
+	/* Hide a client's own drawing while a copy is shown in its place.
+	 * Hidden buffers still get frame callbacks; applygeom() restores borders. */
+	struct wlr_scene_node *n;
+
+	wl_list_for_each(n, &t->children, link) {
+		if (n->type == WLR_SCENE_NODE_TREE)
+			hidelive(wlr_scene_tree_from_node(n), hide);
+		else if (n->type == WLR_SCENE_NODE_BUFFER)
+			wlr_scene_buffer_set_opacity(wlr_scene_buffer_from_node(n),
+					hide ? 0 : liveopacity(wlr_scene_buffer_from_node(n)));
+		else if (hide)
+			wlr_scene_node_set_enabled(n, 0);
+	}
 }
 
 void
@@ -2339,6 +2427,19 @@ killclient(const Arg *arg)
 		client_send_close(sel);
 }
 
+float
+liveopacity(struct wlr_scene_buffer *b)
+{
+	/* The opacity wlr_scene gives a surface's buffer on each commit */
+	struct wlr_scene_surface *s = wlr_scene_surface_try_from_buffer(b);
+	const struct wlr_alpha_modifier_surface_v1_state *a;
+
+	if (!s)
+		return b->opacity;
+	a = wlr_alpha_modifier_v1_get_surface_state(s->surface);
+	return a ? (float)a->multiplier : 1;
+}
+
 void
 locksession(struct wl_listener *listener, void *data)
 {
@@ -2440,6 +2541,10 @@ mapnotify(struct wl_listener *listener, void *data)
 				.width = c->geom.width, .height = c->geom.height};
 		applyrules(c);
 	}
+	if (animations && !c->isgame) {
+		c->proxy = wlr_scene_tree_create(c->scene->node.parent);
+		c->openstart = nowms();
+	}
 	ipcclientevent("open", c);
 	printstatus();
 
@@ -2468,6 +2573,56 @@ maximizenotify(struct wl_listener *listener, void *data)
 			&& wl_resource_get_version(c->surface.xdg->toplevel->resource)
 					< XDG_TOPLEVEL_WM_CAPABILITIES_SINCE_VERSION)
 		wlr_xdg_surface_schedule_configure(c->surface.xdg);
+}
+
+void
+mirror(struct wlr_scene_tree *src, struct wlr_scene_tree *dst, int x, int y, float s, float a)
+{
+	/* Copy what src shows into dst, which is flat, scaled by s and faded by a */
+	struct wlr_scene_node *n;
+	struct wlr_scene_rect *r;
+	struct wlr_scene_buffer *b, *copy;
+	struct wlr_scene_node *copied;
+	float color[4];
+	int i, w, h;
+
+	wl_list_for_each(n, &src->children, link) {
+		if (!n->enabled)
+			continue;
+		switch (n->type) {
+		case WLR_SCENE_NODE_TREE:
+			mirror(wlr_scene_tree_from_node(n), dst, x + n->x, y + n->y, s, a);
+			continue;
+		case WLR_SCENE_NODE_RECT:
+			r = wlr_scene_rect_from_node(n);
+			for (i = 0; i < 4; i++) /* premultiplied */
+				color[i] = r->color[i] * a;
+			r = wlr_scene_rect_create(dst, (int)lroundf((float)r->width * s),
+					(int)lroundf((float)r->height * s), color);
+			copied = &r->node;
+			break;
+		case WLR_SCENE_NODE_BUFFER:
+			b = wlr_scene_buffer_from_node(n);
+			if (!b->buffer)
+				continue;
+			w = b->dst_width ? b->dst_width : b->buffer->width;
+			h = b->dst_height ? b->dst_height : b->buffer->height;
+			copy = wlr_scene_buffer_create(dst, b->buffer);
+			copy->point_accepts_input = noinput;
+			wlr_scene_buffer_set_source_box(copy, &b->src_box);
+			wlr_scene_buffer_set_transform(copy, b->transform);
+			wlr_scene_buffer_set_dest_size(copy, MAX(1, (int)lroundf((float)w * s)),
+					MAX(1, (int)lroundf((float)h * s)));
+			wlr_scene_buffer_set_opacity(copy, a * liveopacity(b));
+			wlr_scene_buffer_set_filter_mode(copy, WLR_SCALE_FILTER_BILINEAR);
+			copied = &copy->node;
+			break;
+		default:
+			continue;
+		}
+		wlr_scene_node_set_position(copied, (int)lroundf((float)(x + n->x) * s),
+				(int)lroundf((float)(y + n->y) * s));
+	}
 }
 
 const MonitorRule *
@@ -2682,6 +2837,12 @@ moveresize(const Arg *arg)
 		wlr_cursor_set_xcursor(cursor, cursor_mgr, "se-resize");
 		break;
 	}
+}
+
+bool
+noinput(struct wlr_scene_buffer *b, double *sx, double *sy)
+{
+	return false;
 }
 
 uint32_t
@@ -3062,7 +3223,8 @@ resize(Client *c, struct wlr_box geo, int interact)
 		c->animfrom = animbox(c, now);
 		c->animto = c->geom;
 		c->animstart = now;
-		c->animdur = animations && c->shown && !c->isgame && !interact ? animmove : 0;
+		c->animdur = animations && c->shown && !c->proxy && !c->isgame && !interact
+				? animmove : 0;
 		if (c->animdur)
 			wlr_output_schedule_frame(c->mon->wlr_output);
 	}
@@ -3748,6 +3910,7 @@ setup(void)
 	 * https://drewdevault.com/2018/07/29/Wayland-shells.html
 	 */
 	wl_list_init(&clients);
+	wl_list_init(&ghosts);
 	wl_list_init(&fstack);
 	hidden_timer = wl_event_loop_add_timer(event_loop, hiddenframes, NULL);
 
@@ -4246,6 +4409,8 @@ unmapnotify(struct wl_listener *listener, void *data)
 {
 	/* Called when the surface is unmapped, and should no longer be shown. */
 	Client *c = wl_container_of(listener, c, unmap);
+	Ghost *g;
+
 	ipcclientevent("close", c);
 	if (c == grabc) {
 		cursor_mode = CurNormal;
@@ -4255,6 +4420,24 @@ unmapnotify(struct wl_listener *listener, void *data)
 	if (c == focused_client)
 		focused_client = NULL;
 
+	if (animations && !c->isgame && c->mon && c->scene->node.enabled) {
+		g = ecalloc(1, sizeof(*g));
+		g->mon = c->mon;
+		g->start = nowms();
+		applygeom(c, g->box = animbox(c, g->start));
+		g->tmpl = wlr_scene_tree_create(c->scene->node.parent);
+		wlr_scene_node_set_enabled(&g->tmpl->node, 0);
+		mirror(c->scene, g->tmpl, 0, 0, 1, 1);
+		g->tree = wlr_scene_tree_create(c->scene->node.parent);
+		wlr_scene_node_place_above(&g->tree->node, &c->scene->node);
+		zoom(g->tmpl, g->tree, g->box, 1, 1);
+		wl_list_insert(&ghosts, &g->link);
+		wlr_output_schedule_frame(g->mon->wlr_output);
+	}
+	if (c->proxy) {
+		wlr_scene_node_destroy(&c->proxy->node);
+		c->proxy = NULL;
+	}
 	wl_list_remove(&c->link);
 	setmon(c, NULL, 0);
 	wl_list_remove(&c->flink);
@@ -4588,6 +4771,20 @@ xytonode(double x, double y, struct wlr_surface **psurface,
 		c = NULL, surface = NULL;
 	if (psurface) *psurface = surface;
 	if (pc) *pc = c;
+}
+
+void
+zoom(struct wlr_scene_tree *src, struct wlr_scene_tree *dst, struct wlr_box b, float s, float a)
+{
+	/* Redraw src into dst at scale s about the centre of b, faded by a */
+	struct wlr_scene_node *n, *tmp;
+
+	wl_list_for_each_safe(n, tmp, &dst->children, link)
+		wlr_scene_node_destroy(n);
+	wlr_scene_node_set_position(&dst->node,
+			b.x + (int)lroundf((float)b.width * (1 - s) / 2),
+			b.y + (int)lroundf((float)b.height * (1 - s) / 2));
+	mirror(src, dst, 0, 0, s, a);
 }
 
 
