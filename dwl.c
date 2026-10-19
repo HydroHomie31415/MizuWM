@@ -129,6 +129,7 @@ typedef struct {
 	struct wl_list flink;
 	struct wlr_box geom; /* layout-relative, includes border */
 	struct wlr_box prev; /* layout-relative, includes border */
+	struct wlr_box floatgeom; /* last floating geometry, restored on float */
 	struct wlr_box bounds; /* only width and height are used */
 	union {
 		struct wlr_xdg_surface *xdg;
@@ -2150,6 +2151,13 @@ mapnotify(struct wl_listener *listener, void *data)
 		setmon(c, p->mon, p->tags);
 		placefloating(c, &p->geom, 0, 0, 0, 0);
 	} else {
+		/* Floating it later uses its own size, centred, like mango */
+		c->floatgeom = c->geom;
+		if (selmon)
+			c->floatgeom = (struct wlr_box){
+				.x = selmon->w.x + (selmon->w.width - c->geom.width) / 2,
+				.y = selmon->w.y + (selmon->w.height - c->geom.height) / 2,
+				.width = c->geom.width, .height = c->geom.height};
 		applyrules(c);
 	}
 	printstatus();
@@ -2702,6 +2710,8 @@ resize(Client *c, struct wlr_box geo, int interact)
 	c->geom = geo;
 	/* Tiled positions come from the layout; scroller columns may lie off-screen */
 	applybounds(c, c->isfloating || interact ? bbox : NULL);
+	if (c->isfloating && !c->isfullscreen && !c->ismaximized && !(c == grabc && grabtile))
+		c->floatgeom = c->geom;
 
 	/* Update scene-graph, including borders */
 	wlr_scene_node_set_position(&c->scene->node, c->geom.x, c->geom.y);
@@ -3105,6 +3115,9 @@ void
 setfloating(Client *c, int floating)
 {
 	Client *p = client_get_parent(c);
+	struct wlr_box b;
+	int was = c->isfloating;
+
 	c->isfloating = floating;
 	if (floating) /* tiling again keeps a slot set by droptile() */
 		c->column = -1;
@@ -3114,6 +3127,19 @@ setfloating(Client *c, int floating)
 	wlr_scene_node_reparent(&c->scene->node, layers[c->isfullscreen ||
 			(p && p->isfullscreen) ? LyrFS
 			: c->isfloating || c->ismaximized ? LyrFloat : LyrTile]);
+	/* Back to where it last floated, as in mango; recentred when that is
+	 * off this monitor or too big for it */
+	if (floating && !was && !c->isfullscreen && c->floatgeom.width > 0) {
+		b = c->floatgeom;
+		if (b.width > c->mon->w.width * 9 / 10 || b.height > c->mon->w.height * 9 / 10
+				|| !wlr_box_intersection(&(struct wlr_box){0}, &b, &c->mon->w)) {
+			b.width = MIN(b.width, c->mon->w.width * 9 / 10);
+			b.height = MIN(b.height, c->mon->w.height * 9 / 10);
+			b.x = c->mon->w.x + (c->mon->w.width - b.width) / 2;
+			b.y = c->mon->w.y + (c->mon->w.height - b.height) / 2;
+		}
+		resize(c, b, 0);
+	}
 	arrange(c->mon);
 	printstatus();
 }
