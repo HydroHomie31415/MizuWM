@@ -79,9 +79,9 @@ dist: clean
 
 install: mywm mywmctl
 	mkdir -p $(DESTDIR)$(PREFIX)/bin
-	rm -f $(DESTDIR)$(PREFIX)/bin/mywm
-	cp -f mywm $(DESTDIR)$(PREFIX)/bin
-	chmod 755 $(DESTDIR)$(PREFIX)/bin/mywm
+	rm -f $(DESTDIR)$(PREFIX)/bin/mywm $(DESTDIR)$(PREFIX)/bin/mywmctl
+	cp -f mywm mywmctl $(DESTDIR)$(PREFIX)/bin
+	chmod 755 $(DESTDIR)$(PREFIX)/bin/mywm $(DESTDIR)$(PREFIX)/bin/mywmctl
 	mkdir -p $(DESTDIR)$(MANDIR)/man1
 	cp -f mywm.1 $(DESTDIR)$(MANDIR)/man1
 	chmod 644 $(DESTDIR)$(MANDIR)/man1/mywm.1
