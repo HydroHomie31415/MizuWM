@@ -2976,6 +2976,7 @@ rulematchre(Client *c, regex_t re[2], const char *id, const char *title)
 void
 run(char *startup_cmd)
 {
+	size_t i;
 	/* Add a Unix socket to the Wayland display. */
 	const char *socket = wl_display_add_socket_auto(dpy);
 	if (!socket)
@@ -2990,6 +2991,10 @@ run(char *startup_cmd)
 
 	/* X clients spawned from here on, startup command included, get DISPLAY */
 	startsatellite();
+
+	/* A session exists only on real hardware (DRM and libinput) */
+	for (i = 0; session && i < LENGTH(autostart); i++)
+		spawn(&(Arg){.v = (const char *[]){ "/bin/sh", "-c", autostart[i], NULL }});
 
 	/* Now that the socket exists and the backend is started, run the startup command */
 	if (startup_cmd) {
@@ -3434,6 +3439,9 @@ setup(void)
 
 	for (i = 0; i < (int)LENGTH(sig); i++)
 		sigaction(sig[i], &sa, NULL);
+
+	for (r = 0; r < LENGTH(sessionenv); r++)
+		setenv(sessionenv[r][0], sessionenv[r][1], 1);
 
 	wlr_log_init(log_level, NULL);
 

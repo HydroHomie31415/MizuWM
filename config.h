@@ -25,6 +25,22 @@ static const float fullscreen_bg[]         = {0.0f, 0.0f, 0.0f, 1.0f}; /* You ca
 /* logging */
 static int log_level = WLR_ERROR;
 
+/* session (DESIGN.md 5): environment for everything mywm spawns */
+static const char *const sessionenv[][2] = {
+	{ "MESA_SHADER_CACHE_MAX_SIZE",  "10G" },
+	{ "MESA_DISK_CACHE_SINGLE_FILE", "true" },
+	{ "XDG_CURRENT_DESKTOP",         "mywm" },
+	{ "XDG_SESSION_TYPE",            "wayland" },
+};
+/* Started on real hardware only, never nested or headless. The first hands
+ * the session environment to D-Bus activated services such as portals. */
+static const char *const autostart[] = {
+	"dbus-update-activation-environment --systemd WAYLAND_DISPLAY DISPLAY "
+		"XDG_CURRENT_DESKTOP XDG_SESSION_TYPE MYWM_SOCKET",
+	"noctalia",
+	"gnome-keyring-daemon --start --components=secrets",
+};
+
 /* Regexes (POSIX extended) on app_id and title, from mango's window rules */
 static const Rule rules[] = {
 	{ .id = "^(org\\.gnome\\.Calculator|gnome-calculator|galculator|blueman-manager|org\\.gnome\\.Nautilus|xdg-desktop-portal.*|zoom)$",

@@ -3,3 +3,4 @@ Name=mywm
 Comment=Gaming-first scrolling Wayland compositor
 Exec=mywm
 Type=Application
+DesktopNames=mywm;wlroots

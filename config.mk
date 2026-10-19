@@ -7,6 +7,8 @@ PKG_CONFIG = pkg-config
 PREFIX = /usr/local
 MANDIR = $(PREFIX)/share/man
 DATADIR = $(PREFIX)/share
+# display managers (greetd greeters, SDDM, GDM) look here, not under /usr/local
+SESSIONDIR = /usr/share/wayland-sessions
 
 WLR_INCS = `$(PKG_CONFIG) --cflags wlroots-0.20`
 WLR_LIBS = `$(PKG_CONFIG) --libs wlroots-0.20`

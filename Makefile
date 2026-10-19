@@ -73,7 +73,7 @@ dist: clean
 	mkdir -p mywm-$(VERSION)
 	cp -R LICENSE* Makefile CHANGELOG.md README.md client.h config.h \
 		config.mk protocols mywm.1 dwl.c nested.c ime.h ipc.h mywmctl.c util.h mywm.desktop \
-		mywm-$(VERSION)
+		mywm-portals.conf mywm-$(VERSION)
 	tar -caf mywm-$(VERSION).tar.gz mywm-$(VERSION)
 	rm -rf mywm-$(VERSION)
 
@@ -85,10 +85,13 @@ install: mywm mywmctl
 	mkdir -p $(DESTDIR)$(MANDIR)/man1
 	cp -f mywm.1 $(DESTDIR)$(MANDIR)/man1
 	chmod 644 $(DESTDIR)$(MANDIR)/man1/mywm.1
-	mkdir -p $(DESTDIR)$(DATADIR)/wayland-sessions
-	cp -f mywm.desktop $(DESTDIR)$(DATADIR)/wayland-sessions/mywm.desktop
-	chmod 644 $(DESTDIR)$(DATADIR)/wayland-sessions/mywm.desktop
+	mkdir -p $(DESTDIR)$(SESSIONDIR)
+	cp -f mywm.desktop $(DESTDIR)$(SESSIONDIR)/mywm.desktop
+	chmod 644 $(DESTDIR)$(SESSIONDIR)/mywm.desktop
+	mkdir -p $(DESTDIR)$(DATADIR)/xdg-desktop-portal
+	cp -f mywm-portals.conf $(DESTDIR)$(DATADIR)/xdg-desktop-portal/mywm-portals.conf
+	chmod 644 $(DESTDIR)$(DATADIR)/xdg-desktop-portal/mywm-portals.conf
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/mywm $(DESTDIR)$(PREFIX)/bin/mywmctl \
-		$(DESTDIR)$(MANDIR)/man1/mywm.1 \
-		$(DESTDIR)$(DATADIR)/wayland-sessions/mywm.desktop
+		$(DESTDIR)$(MANDIR)/man1/mywm.1 $(DESTDIR)$(SESSIONDIR)/mywm.desktop \
+		$(DESTDIR)$(DATADIR)/xdg-desktop-portal/mywm-portals.conf
