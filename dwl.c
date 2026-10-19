@@ -4358,7 +4358,7 @@ xytonode(double x, double y, struct wlr_surface **psurface,
 int
 main(int argc, char *argv[])
 {
-	char *startup_cmd = NULL;
+	char *startup_cmd = NULL, log[PATH_MAX];
 	int c;
 
 	while ((c = getopt(argc, argv, "s:hdv")) != -1) {
@@ -4377,6 +4377,13 @@ main(int argc, char *argv[])
 	/* Wayland requires XDG_RUNTIME_DIR for creating its communications socket */
 	if (!getenv("XDG_RUNTIME_DIR"))
 		die("XDG_RUNTIME_DIR must be set");
+	/* Debug logs, ours and those of what we spawn, go to a file (DESIGN.md 11.1) */
+	if (log_level == WLR_DEBUG) {
+		snprintf(log, sizeof(log), "%s/mywm.log", getenv("XDG_RUNTIME_DIR"));
+		if (!freopen(log, "w", stderr))
+			die("open %s:", log);
+		setvbuf(stderr, NULL, _IONBF, 0);
+	}
 	setup();
 	run(startup_cmd);
 	cleanup();
