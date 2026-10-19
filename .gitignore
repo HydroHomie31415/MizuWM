@@ -4,3 +4,4 @@ mywm-debug
 *-protocol.c
 *-protocol.h
 .ccls-cache
+mywmctl

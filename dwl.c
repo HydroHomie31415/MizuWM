@@ -151,7 +151,7 @@ typedef struct {
 	struct wl_listener fullscreen;
 	struct wl_listener set_decoration_mode;
 	struct wl_listener destroy_decoration;
-	unsigned int bw;
+	unsigned int bw, id; /* id: for IPC, never reused */
 	uint32_t tags;
 	int isfloating, isurgent, isfullscreen, ismaximized;
 	uint32_t rulesdone; /* rules already applied, bit per rule */
@@ -414,6 +414,7 @@ static struct timespec satellite_started;
 static struct wl_event_source *satellite_timer, *satellite_exit;
 static int xdisplay = -1, xsocks[2] = {-1, -1}; /* abstract, filesystem */
 static int locked;
+static unsigned int lastclientid;
 static Client *focused_client;
 static struct wl_display *dpy;
 static struct wl_event_loop *event_loop;
@@ -513,6 +514,8 @@ static regex_t ruleregex[LENGTH(rules)][2]; /* app_id, title */
 #include "client.h"
 
 #include "ime.h"
+
+#include "ipc.h"
 
 /* function implementations */
 void
@@ -839,6 +842,7 @@ checkidleinhibitor(struct wlr_surface *exclude)
 void
 cleanup(void)
 {
+	ipccleanup();
 	cleanuplisteners();
 	stopsatellite();
 	wl_display_destroy_clients(dpy);
@@ -1273,6 +1277,7 @@ createnotify(struct wl_listener *listener, void *data)
 	/* Allocate a Client for this surface */
 	c = toplevel->base->data = ecalloc(1, sizeof(*c));
 	c->surface.xdg = toplevel->base;
+	c->id = ++lastclientid;
 	c->bw = borderpx;
 	c->column = -1;
 	c->proportion = scroller_proportion;
@@ -2872,6 +2877,7 @@ run(char *startup_cmd)
 	if (!socket)
 		die("startup: display_add_socket_auto");
 	setenv("WAYLAND_DISPLAY", socket, 1);
+	ipcsetup(socket);
 
 	/* Start the backend. This will enumerate outputs and inputs, become the DRM
 	 * master, etc */
