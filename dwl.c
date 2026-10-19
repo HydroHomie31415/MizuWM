@@ -272,6 +272,21 @@ typedef struct {
 } MonitorRule;
 
 typedef struct {
+	Monitor *mon;
+	struct wlr_scene_tree *tree; /* NULL while closed */
+	Client *c[64];
+	struct wlr_box box[64]; /* thumbnails, layout-relative */
+	int n, sel, overview;
+	uint32_t mods; /* picks when these are released */
+} Picker;
+
+typedef struct {
+	struct wlr_scene_tree *tree;
+	struct wlr_box geo; /* the window's xdg geometry */
+	float s;
+} Thumb;
+
+typedef struct {
 	struct wlr_pointer_constraint_v1 *constraint;
 	struct wl_listener destroy;
 } PointerConstraint;
@@ -396,6 +411,19 @@ static int openxsocket(int n, int abstract);
 static void outputmgrapply(struct wl_listener *listener, void *data);
 static void outputmgrapplyortest(struct wlr_output_configuration_v1 *config, int test);
 static void outputmgrtest(struct wl_listener *listener, void *data);
+static void overview(const Arg *arg);
+static int pickat(double x, double y);
+static void pickclose(void);
+static int pickcmp(const void *a, const void *b);
+static void pickdone(Client *c);
+static void pickdraw(void);
+static int pickkey(xkb_keysym_t sym);
+static void picklayout(struct wlr_box *area, int maxh, int gap);
+static void pickmove(enum wlr_direction dir);
+static int pickopen(Monitor *m, int overview);
+static void pickremove(Client *c);
+static int pickrows(int h, struct wlr_box *area, int gap);
+static int pickwidth(Client *c, int h);
 static void pointerfocus(Client *c, LayerSurface* l, struct wlr_surface *surface,
 		double sx, double sy, uint32_t time);
 static void placefloating(Client *c, struct wlr_box *ref, int w, int h, int offx, int offy);
@@ -442,6 +470,8 @@ static void swapdir(const Arg *arg);
 static void tag(const Arg *arg);
 static void tagadj(const Arg *arg);
 static void tagmon(const Arg *arg);
+static void thumb(Client *c, struct wlr_scene_tree *dst, struct wlr_box box);
+static void thumbsurface(struct wlr_surface *surface, int sx, int sy, void *data);
 static void tile(Monitor *m);
 static void toplevelactivate(struct wl_listener *listener, void *data);
 static void toplevelclose(struct wl_listener *listener, void *data);
@@ -543,6 +573,8 @@ static struct wlr_box sgeom;
 static struct wl_list mons;
 static Monitor *selmon;
 static int consumed[KEY_MAX + 1];
+static Picker pick; /* overview and switcher */
+static int pickpressed; /* buttons pressed on the picker, releases swallowed */
 
 /* global event handlers */
 static struct wl_listener cursor_axis = {.notify = axisnotify};
@@ -645,6 +677,8 @@ animate(Monitor *m)
 		wlr_output_schedule_frame(m->wlr_output);
 	if (done) /* the pointer may be over another window now */
 		motionnotify(0, NULL, 0, 0, 0, 0);
+	if (pick.tree && pick.mon == m)
+		pickdraw();
 }
 
 struct wlr_box
@@ -804,7 +838,7 @@ arrange(Monitor *m)
 		if (c->mon == m) {
 			c->hiding &= !VISIBLEON(c, m);
 			wlr_scene_node_set_enabled(&c->scene->node, VISIBLEON(c, m) || c->hiding);
-			client_set_suspended(c, !VISIBLEON(c, m)
+			client_set_suspended(c, !VISIBLEON(c, m) && !(pick.tree && pick.mon == m)
 					&& (!c->image_capture_source
 					|| wl_list_empty(&c->image_capture_source->resources)));
 		}
@@ -928,6 +962,8 @@ axisnotify(struct wl_listener *listener, void *data)
 	static uint32_t last;
 
 	wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
+	if (pick.tree)
+		return;
 
 	if (!locked) {
 		if (event->orientation == WL_POINTER_AXIS_VERTICAL_SCROLL)
@@ -964,8 +1000,23 @@ buttonpress(struct wl_listener *listener, void *data)
 	Client *c = NULL;
 	LayerSurface *l = NULL;
 	const Button *b;
+	int i;
 
 	wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
+
+	/* Left click picks, right click closes */
+	if (pick.tree && event->state == WL_POINTER_BUTTON_STATE_PRESSED) {
+		pickpressed++;
+		i = pickat(cursor->x, cursor->y);
+		if (event->button == BTN_RIGHT && i >= 0)
+			client_send_close(pick.c[i]);
+		else if (event->button == BTN_LEFT)
+			pickdone(i >= 0 ? pick.c[i] : NULL);
+		return;
+	} else if (event->state == WL_POINTER_BUTTON_STATE_RELEASED && pickpressed > 0) {
+		pickpressed--;
+		return;
+	}
 
 	switch (event->state) {
 	case WL_POINTER_BUTTON_STATE_PRESSED:
@@ -1099,6 +1150,8 @@ cleanupmon(struct wl_listener *listener, void *data)
 	Ghost *g, *gtmp;
 	size_t i;
 
+	if (pick.mon == m)
+		pickclose();
 	wl_list_for_each_safe(g, gtmp, &ghosts, link)
 		if (g->mon == m)
 			destroyghost(g);
@@ -2114,6 +2167,10 @@ void
 focusdir(const Arg *arg)
 {
 	Client *c, *sel = focustop(selmon);
+	if (pick.tree) {
+		pickmove(arg->i);
+		return;
+	}
 	if (!sel || !(c = dirclient(sel, arg->i, 0)))
 		return;
 	focusclient(c, NULL, 1);
@@ -2351,15 +2408,20 @@ keypress(struct wl_listener *listener, void *data)
 	/* On _press_ attempt to process a compositor keybinding; while the
 	 * screen is locked only lockedkeys apply */
 	if (event->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
-		for (int i = 0; i < 2; i++) {
+		if (pick.tree)
+			handled = pickkey(group->keysyms[0]);
+		for (int i = 0; !handled && i < 2; i++) {
 			const Key *key = keybinding(group->mods, group->keysyms[i]);
 			if (key) {
-				consumed[event->keycode] = 1;
+				/* other bindings close the picker */
+				if (pick.tree && key->func != overview && key->func != focusdir)
+					pickclose();
 				key->func(&key->arg);
 				handled = 1;
-				break;
 			}
 		}
+		handled |= pick.tree != NULL; /* it takes every key while open */
+		consumed[event->keycode] |= handled;
 	}
 
 	if (handled && group->wlr_group->keyboard.repeat_info.delay > 0)
@@ -2408,6 +2470,8 @@ keyrepeat(void *data)
 	wl_event_source_timer_update(group->key_repeat_source,
 			1000 / group->wlr_group->keyboard.repeat_info.rate);
 
+	if (pick.tree && pickkey(group->keysyms[0]))
+		return 0;
 	for (int i = 0; i < 2; i++) {
 		const Key *key = keybinding(group->mods, group->keysyms[i]);
 		if (key) {
@@ -2451,6 +2515,7 @@ locksession(struct wl_listener *listener, void *data)
 		return;
 	}
 	lock = session_lock->data = ecalloc(1, sizeof(*lock));
+	pickclose();
 	focusclient(NULL, NULL, 0);
 
 	lock->scene = wlr_scene_tree_create(layers[LyrBlock]);
@@ -2683,6 +2748,22 @@ motionnotify(uint32_t time, struct wlr_input_device *device, double dx, double d
 	struct wlr_surface *surface = NULL;
 	struct wlr_pointer_constraint_v1 *constraint;
 	struct wlr_box box;
+	int i;
+
+	/* The picker takes the pointer while open */
+	if (pick.tree) {
+		if (time) {
+			wlr_cursor_move(cursor, device, dx, dy);
+			wlr_idle_notifier_v1_notify_activity(idle_notifier, seat);
+			if ((i = pickat(cursor->x, cursor->y)) >= 0 && i != pick.sel) {
+				pick.sel = i;
+				wlr_output_schedule_frame(pick.mon->wlr_output);
+			}
+		}
+		wlr_seat_pointer_clear_focus(seat);
+		wlr_cursor_set_xcursor(cursor, cursor_mgr, "default");
+		return;
+	}
 
 	/* Find the client under the pointer and send the event along. */
 	xytonode(cursor->x, cursor->y, &surface, &c, &l, &sx, &sy);
@@ -2997,6 +3078,278 @@ outputmgrtest(struct wl_listener *listener, void *data)
 {
 	struct wlr_output_configuration_v1 *config = data;
 	outputmgrapplyortest(config, 1);
+}
+
+void
+overview(const Arg *arg)
+{
+	if (!pick.tree)
+		pickopen(selmon, 1);
+	else if (pick.overview)
+		pickdone(pick.c[pick.sel]);
+}
+
+int
+pickat(double x, double y)
+{
+	int i;
+	for (i = 0; i < pick.n; i++)
+		if (wlr_box_contains_point(&pick.box[i], x, y))
+			return i;
+	return -1;
+}
+
+void
+pickclose(void)
+{
+	if (!pick.tree)
+		return;
+	wlr_scene_node_destroy(&pick.tree->node);
+	pick.tree = NULL;
+	pick.n = 0;
+	arrange(pick.mon); /* suspends the hidden windows again */
+}
+
+int
+pickcmp(const void *a, const void *b)
+{
+	/* By tag, tiles before floating windows, then by column */
+	const Client *x = *(Client *const *)a, *y = *(Client *const *)b;
+	int tx = __builtin_ctz(x->tags & TAGMASK), ty = __builtin_ctz(y->tags & TAGMASK);
+	if (tx != ty)
+		return tx - ty;
+	if (x->isfloating != y->isfloating)
+		return x->isfloating - y->isfloating;
+	return cmpcolumn(a, b);
+}
+
+void
+pickdone(Client *c)
+{
+	/* Close the picker and focus c, NULL cancels */
+	pickclose();
+	if (!c || !c->mon)
+		return;
+	if (!VISIBLEON(c, c->mon)) {
+		selmon = c->mon;
+		view(&(Arg){.ui = c->tags & -c->tags});
+	}
+	focusclient(c, NULL, 1);
+	warpto(&c->geom);
+}
+
+void
+pickdraw(void)
+{
+	/* Rebuilt every frame, so the thumbnails stay live */
+	static const float panel[] = COLOR(0x15151aeb);
+	Monitor *m = pick.mon;
+	struct wlr_scene_node *node, *tmp;
+	struct wlr_scene_rect *r;
+	struct wlr_box area, b;
+	int i, maxh;
+
+	wl_list_for_each_safe(node, tmp, &pick.tree->children, link)
+		wlr_scene_node_destroy(node);
+	if (pick.overview) {
+		area = (struct wlr_box){m->w.x + 48, m->w.y + 48, m->w.width - 96, m->w.height - 96};
+		maxh = area.height / 2;
+	} else {
+		area = (struct wlr_box){m->m.x + m->m.width / 10, m->m.y + m->m.height / 10,
+				m->m.width * 4 / 5, m->m.height * 4 / 5};
+		maxh = m->m.height / 4;
+	}
+	picklayout(&area, maxh, 14);
+
+	b = pick.box[0];
+	for (i = 1; i < pick.n; i++) {
+		b.width = MAX(b.x + b.width, pick.box[i].x + pick.box[i].width) - MIN(b.x, pick.box[i].x);
+		b.height = MAX(b.y + b.height, pick.box[i].y + pick.box[i].height) - MIN(b.y, pick.box[i].y);
+		b.x = MIN(b.x, pick.box[i].x);
+		b.y = MIN(b.y, pick.box[i].y);
+	}
+	b = pick.overview ? m->m
+			: (struct wlr_box){b.x - 28, b.y - 28, b.width + 56, b.height + 56};
+	r = wlr_scene_rect_create(pick.tree, b.width, b.height, panel);
+	wlr_scene_node_set_position(&r->node, b.x, b.y);
+
+	for (i = 0; i < pick.n; i++) {
+		b = pick.box[i];
+		if (i == pick.sel) {
+			r = wlr_scene_rect_create(pick.tree, b.width + 8, b.height + 8, focuscolor);
+			wlr_scene_node_set_position(&r->node, b.x - 4, b.y - 4);
+		}
+		r = wlr_scene_rect_create(pick.tree, b.width, b.height, rootcolor);
+		wlr_scene_node_set_position(&r->node, b.x, b.y);
+		thumb(pick.c[i], pick.tree, b);
+	}
+	wlr_output_schedule_frame(m->wlr_output);
+}
+
+int
+pickkey(xkb_keysym_t sym)
+{
+	switch (sym) {
+	case XKB_KEY_Escape:
+		pickdone(NULL);
+		return 1;
+	case XKB_KEY_Return:
+	case XKB_KEY_KP_Enter:
+		pickdone(pick.c[pick.sel]);
+		return 1;
+	case XKB_KEY_Left:
+		pickmove(WLR_DIRECTION_LEFT);
+		return 1;
+	case XKB_KEY_Right:
+		pickmove(WLR_DIRECTION_RIGHT);
+		return 1;
+	case XKB_KEY_Up:
+		pickmove(WLR_DIRECTION_UP);
+		return 1;
+	case XKB_KEY_Down:
+		pickmove(WLR_DIRECTION_DOWN);
+		return 1;
+	}
+	return 0;
+}
+
+void
+picklayout(struct wlr_box *area, int maxh, int gap)
+{
+	/* The largest thumbnails whose rows fit in area, centred */
+	int lo = 1, hi = MAX(1, maxh), mid, total, i;
+
+	while (lo < hi) {
+		mid = (lo + hi + 1) / 2;
+		total = pickrows(mid, area, gap);
+		if (total >= 0 && total <= area->height)
+			lo = mid;
+		else
+			hi = mid - 1;
+	}
+	total = pickrows(lo, area, gap);
+	for (i = 0; i < pick.n; i++)
+		pick.box[i].y += (area->height - total) / 2;
+}
+
+void
+pickmove(enum wlr_direction dir)
+{
+	/* To the nearest thumbnail that way; left and right wrap */
+	struct wlr_box *s = &pick.box[pick.sel], *b;
+	int i, dx, dy, p, q, best = -1, score = INT_MAX;
+
+	for (i = 0; i < pick.n; i++) {
+		b = &pick.box[i];
+		dx = b->x + b->width / 2 - (s->x + s->width / 2);
+		dy = b->y + b->height / 2 - (s->y + s->height / 2);
+		p = dir == WLR_DIRECTION_LEFT ? -dx : dir == WLR_DIRECTION_RIGHT ? dx
+				: dir == WLR_DIRECTION_UP ? -dy : dy;
+		q = dir == WLR_DIRECTION_LEFT || dir == WLR_DIRECTION_RIGHT ? abs(dy) : abs(dx);
+		if (p > 0 && p + 4 * q < score) {
+			score = p + 4 * q;
+			best = i;
+		}
+	}
+	if (best < 0 && (dir == WLR_DIRECTION_LEFT || dir == WLR_DIRECTION_RIGHT))
+		best = (pick.sel + (dir == WLR_DIRECTION_LEFT ? -1 : 1) + pick.n) % pick.n;
+	if (best >= 0)
+		pick.sel = best;
+	wlr_output_schedule_frame(pick.mon->wlr_output);
+}
+
+int
+pickopen(Monitor *m, int overview)
+{
+	/* The overview shows every window on m, the switcher those on its
+	 * tags, most recently focused first */
+	Client *c;
+	int i;
+
+	if (pick.tree || !m || locked || cursor_mode == CurMove
+			|| cursor_mode == CurResize || seat->drag)
+		return 0;
+	pick.n = pick.sel = 0;
+	if (overview) {
+		wl_list_for_each(c, &clients, link)
+			if (c->mon == m && (c->tags & TAGMASK) && pick.n < (int)LENGTH(pick.c))
+				pick.c[pick.n++] = c;
+		qsort(pick.c, pick.n, sizeof(*pick.c), pickcmp);
+	} else {
+		wl_list_for_each(c, &fstack, flink)
+			if (VISIBLEON(c, m) && pick.n < (int)LENGTH(pick.c))
+				pick.c[pick.n++] = c;
+	}
+	if (!pick.n)
+		return 0;
+	for (i = 0; i < pick.n; i++) {
+		if (pick.c[i] == focustop(m))
+			pick.sel = i;
+		client_set_suspended(pick.c[i], 0);
+	}
+	pick.mon = m;
+	pick.overview = overview;
+	pick.mods = 0;
+	pick.tree = wlr_scene_tree_create(layers[LyrOverlay]);
+	wlr_scene_node_raise_to_top(&pick.tree->node);
+	pickdraw();
+	motionnotify(0, NULL, 0, 0, 0, 0);
+	return 1;
+}
+
+void
+pickremove(Client *c)
+{
+	int i;
+
+	for (i = 0; i < pick.n && pick.c[i] != c; i++);
+	if (i == pick.n)
+		return;
+	pick.n--;
+	memmove(&pick.c[i], &pick.c[i + 1], (pick.n - i) * sizeof(*pick.c));
+	memmove(&pick.box[i], &pick.box[i + 1], (pick.n - i) * sizeof(*pick.box));
+	if (pick.sel > i || pick.sel == pick.n)
+		pick.sel--;
+	if (pick.n) {
+		wlr_output_schedule_frame(pick.mon->wlr_output);
+	} else { /* unmapnotify() arranges */
+		wlr_scene_node_destroy(&pick.tree->node);
+		pick.tree = NULL;
+	}
+}
+
+int
+pickrows(int h, struct wlr_box *area, int gap)
+{
+	/* Wraps thumbnails of height h into centred rows; their total
+	 * height, or -1 if one is wider than area */
+	int i, j, start = 0, x = 0, y = area->y, w = 0;
+
+	for (i = 0; i <= pick.n; i++) {
+		if (i < pick.n && (w = pickwidth(pick.c[i], h)) > area->width)
+			return -1;
+		if (i == pick.n || (i > start && x + gap + w > area->width)) {
+			for (j = start; j < i; j++)
+				pick.box[j].x += area->x + (area->width - x) / 2;
+			if (i == pick.n)
+				break;
+			start = i;
+			x = 0;
+			y += h + gap;
+		}
+		x += i > start ? gap : 0;
+		pick.box[i] = (struct wlr_box){x, y, w, h};
+		x += w;
+	}
+	return y + h - area->y;
+}
+
+int
+pickwidth(Client *c, int h)
+{
+	struct wlr_box *g = &c->surface.xdg->geometry;
+	float a = g->width > 0 && g->height > 0 ? (float)g->width / (float)g->height : 16.0f / 9;
+	return (int)lroundf((float)h * MAX(9.0f / 16, MIN(a, 12.0f / 5)));
 }
 
 void
@@ -4258,6 +4611,60 @@ tagmon(const Arg *arg)
 }
 
 void
+thumb(Client *c, struct wlr_scene_tree *dst, struct wlr_box box)
+{
+	/* c's surfaces scaled into box. Not mirror(): that skips hidden tags
+	 * and keeps the scroller's clip. */
+	struct wlr_surface *s = client_surface(c);
+	Thumb t = {.geo = c->surface.xdg->geometry};
+
+	if (t.geo.width <= 0 || t.geo.height <= 0)
+		t.geo = (struct wlr_box){0, 0, s->current.width, s->current.height};
+	if (t.geo.width <= 0 || t.geo.height <= 0)
+		return;
+	t.s = MIN((float)box.width / (float)t.geo.width, (float)box.height / (float)t.geo.height);
+	t.tree = wlr_scene_tree_create(dst);
+	wlr_scene_node_set_position(&t.tree->node,
+			box.x + (box.width - (int)lroundf((float)t.geo.width * t.s)) / 2,
+			box.y + (box.height - (int)lroundf((float)t.geo.height * t.s)) / 2);
+	wlr_surface_for_each_surface(s, thumbsurface, &t);
+}
+
+void
+thumbsurface(struct wlr_surface *surface, int sx, int sy, void *data)
+{
+	Thumb *t = data;
+	struct wlr_scene_buffer *b;
+	struct wlr_box in, r = {sx, sy, surface->current.width, surface->current.height};
+	struct wlr_fbox src;
+	struct timespec now;
+	double fx, fy;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	wlr_surface_send_frame_done(surface, &now);
+	if (!surface->mapped || !surface->buffer || !wlr_box_intersection(&in, &r, &t->geo))
+		return;
+	/* crop to the window geometry, dropping client-side shadows */
+	wlr_surface_get_buffer_source_box(surface, &src);
+	fx = src.width / r.width;
+	fy = src.height / r.height;
+	src.x += (in.x - r.x) * fx;
+	src.y += (in.y - r.y) * fy;
+	src.width = in.width * fx;
+	src.height = in.height * fy;
+
+	b = wlr_scene_buffer_create(t->tree, &surface->buffer->base);
+	wlr_scene_buffer_set_source_box(b, &src);
+	wlr_scene_buffer_set_transform(b, surface->current.transform);
+	wlr_scene_buffer_set_dest_size(b, MAX(1, (int)lroundf((float)in.width * t->s)),
+			MAX(1, (int)lroundf((float)in.height * t->s)));
+	wlr_scene_node_set_position(&b->node, (int)lroundf((float)(in.x - t->geo.x) * t->s),
+			(int)lroundf((float)(in.y - t->geo.y) * t->s));
+	wlr_scene_buffer_set_filter_mode(b, WLR_SCALE_FILTER_BILINEAR);
+	b->point_accepts_input = noinput;
+}
+
+void
 tile(Monitor *m)
 {
 	unsigned int mw, my, ty;
@@ -4412,6 +4819,7 @@ unmapnotify(struct wl_listener *listener, void *data)
 	Ghost *g;
 
 	ipcclientevent("close", c);
+	pickremove(c);
 	if (c == grabc) {
 		cursor_mode = CurNormal;
 		grabc = NULL;

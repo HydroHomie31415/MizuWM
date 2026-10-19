@@ -54,6 +54,7 @@ static const Action actions[] = {
 	{ "send_to_output",       tagmon,                ActDir,     {0} },
 	{ "spawn",                spawn,                 ActCmd,     {0} },
 	{ "toggle_scratchpad",    togglescratch,         ActScratch, {0} },
+	{ "overview",             overview,              ActNone,    {0} },
 	{ "quit",                 quit,                  ActNone,    {0} },
 };
 
@@ -531,6 +532,8 @@ ipcdispatch(int argc, char **argv)
 		arg.v = &scratchpads[i];
 		break;
 	}
+	if (pick.tree && a->func != overview && a->func != focusdir)
+		pickclose();
 	a->func(&arg);
 	free(cmd.s);
 	return NULL;

@@ -263,7 +263,7 @@ static const Key keys[] = {
 	{ MODKEY,              XKB_KEY_b,            spawn,                SHCMD("helium-browser") },
 	{ MODKEY,              XKB_KEY_d,            spawn,                SHCMD("equibop") },
 	{ MODKEY,              XKB_KEY_e,            spawn,                SHCMD("kumo-files") },
-	/* TODO phase 5: Super+Tab overview, Alt+Tab / Alt+Shift+Tab switcher */
+	{ MODKEY,              XKB_KEY_Tab,          overview,             {0} },
 	{ MODKEY|SHIFTKEY,     XKB_KEY_e,            quit,                 {0} },
 
 	/* Ctrl-Alt-Backspace and Ctrl-Alt-Fx used to be handled by X server */
