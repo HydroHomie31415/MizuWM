@@ -2952,6 +2952,15 @@ satellitespawn(void *data)
 }
 
 static int
+colwidth(Monitor *m, Client *head, int ncols)
+{
+	/* A lone column, or one headed by a fullscreen or maximized window,
+	 * takes the whole width and pushes its neighbours away, as in mango */
+	return ncols == 1 || head->isfullscreen || head->ismaximized ? m->w.width
+			: (int)roundf(head->proportion * m->w.width);
+}
+
+static int
 cmpcolumn(const void *a, const void *b)
 {
 	const Client *x = *(Client *const *)a, *y = *(Client *const *)b;
@@ -3020,7 +3029,7 @@ scroller(Monitor *m)
 	for (i = 0, x = 0; i < n; i++) {
 		if (v[i]->row)
 			continue;
-		w = ncols == 1 ? m->w.width : (int)roundf(v[i]->proportion * m->w.width);
+		w = colwidth(m, v[i], ncols);
 		if (anchor && v[i]->column == anchor->column)
 			ax = x;
 		if (f && v[i]->column == f->column) {
@@ -3044,7 +3053,7 @@ scroller(Monitor *m)
 		scroll = f->column ? fx + fw - m->w.width : fx;
 
 	for (i = 0, x = m->w.x - scroll; i < n; i = j, x += w) {
-		w = ncols == 1 ? m->w.width : (int)roundf(v[i]->proportion * m->w.width);
+		w = colwidth(m, v[i], ncols);
 		for (j = i, sum = 0; j < n && v[j]->column == v[i]->column; j++)
 			sum += v[j]->cfact;
 		for (k = i, y = m->w.y; k < j; k++, y += h) {
