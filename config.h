@@ -264,6 +264,8 @@ static const Key keys[] = {
 	{ MODKEY,              XKB_KEY_d,            spawn,                SHCMD("equibop") },
 	{ MODKEY,              XKB_KEY_e,            spawn,                SHCMD("kumo-files") },
 	{ MODKEY,              XKB_KEY_Tab,          overview,             {0} },
+	{ ALTKEY,              XKB_KEY_Tab,          switcher,             {.i = +1} },
+	{ ALTKEY|SHIFTKEY,     XKB_KEY_Tab,          switcher,             {.i = -1} },
 	{ MODKEY|SHIFTKEY,     XKB_KEY_e,            quit,                 {0} },
 
 	/* Ctrl-Alt-Backspace and Ctrl-Alt-Fx used to be handled by X server */

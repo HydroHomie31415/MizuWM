@@ -467,6 +467,7 @@ static void startsatellite(void);
 static void stopsatellite(void);
 static void swapclients(Client *a, Client *b);
 static void swapdir(const Arg *arg);
+static void switcher(const Arg *arg);
 static void tag(const Arg *arg);
 static void tagadj(const Arg *arg);
 static void tagmon(const Arg *arg);
@@ -2414,9 +2415,14 @@ keypress(struct wl_listener *listener, void *data)
 			const Key *key = keybinding(group->mods, group->keysyms[i]);
 			if (key) {
 				/* other bindings close the picker */
-				if (pick.tree && key->func != overview && key->func != focusdir)
+				if (pick.tree && key->func != overview && key->func != focusdir
+						&& key->func != switcher)
 					pickclose();
 				key->func(&key->arg);
+				/* the switcher picks once these are released */
+				if (key->func == switcher && pick.tree && !pick.mods)
+					pick.mods = group->mods & (WLR_MODIFIER_CTRL
+							| WLR_MODIFIER_ALT | WLR_MODIFIER_LOGO);
 				handled = 1;
 			}
 		}
@@ -2451,6 +2457,9 @@ keypressmod(struct wl_listener *listener, void *data)
 	 * pressed. We simply communicate this to the client. */
 	KeyboardGroup *group = wl_container_of(listener, group, modifiers);
 
+	if (pick.tree && pick.mods
+			&& !(wlr_keyboard_get_modifiers(&group->wlr_group->keyboard) & pick.mods))
+		pickdone(pick.c[pick.sel]);
 	if (input_method_keyboard_grab_forward_modifiers(group))
 		return;
 
@@ -4569,6 +4578,16 @@ swapdir(const Arg *arg)
 	swapclients(sel, c);
 	arrange(selmon);
 	warpto(&sel->geom);
+}
+
+void
+switcher(const Arg *arg)
+{
+	/* Alt+Tab: the windows on the monitor's tags, most recent first */
+	if (!pick.tree && !pickopen(selmon, 0))
+		return;
+	pick.sel = (pick.sel + arg->i + pick.n) % pick.n;
+	wlr_output_schedule_frame(pick.mon->wlr_output);
 }
 
 void

@@ -23,7 +23,7 @@ typedef struct {
 	Buf out;
 } IpcClient;
 
-enum { ActNone, ActTag, ActDir, ActDelta, ActCmd, ActScratch }; /* argument types */
+enum { ActNone, ActTag, ActDir, ActDelta, ActCmd, ActScratch, ActNext }; /* argument types */
 
 typedef struct {
 	const char *name;
@@ -55,6 +55,7 @@ static const Action actions[] = {
 	{ "spawn",                spawn,                 ActCmd,     {0} },
 	{ "toggle_scratchpad",    togglescratch,         ActScratch, {0} },
 	{ "overview",             overview,              ActNone,    {0} },
+	{ "switcher",             switcher,              ActNext,    {0} },
 	{ "quit",                 quit,                  ActNone,    {0} },
 };
 
@@ -531,8 +532,13 @@ ipcdispatch(int argc, char **argv)
 			return "expected a scratchpad name";
 		arg.v = &scratchpads[i];
 		break;
+	case ActNext:
+		if (argc != 2 || (strcmp(argv[1], "next") && strcmp(argv[1], "prev")))
+			return "expected next or prev";
+		arg.i = strcmp(argv[1], "next") ? -1 : +1;
+		break;
 	}
-	if (pick.tree && a->func != overview && a->func != focusdir)
+	if (pick.tree && a->func != overview && a->func != focusdir && a->func != switcher)
 		pickclose();
 	a->func(&arg);
 	free(cmd.s);
