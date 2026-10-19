@@ -27,9 +27,9 @@ Decided by the user where mywm deliberately differs from mango:
 - **Fullscreen acts like borderless windowed** (as on Windows): focus can move
   from a fullscreen window to other windows, and the fullscreen window stays
   fullscreen, visible and live (a game keeps running and shooting still works)
-  instead of being unfullscreened or suspended. Not implemented yet: focusdir and
-  sloppy focus still stop at a fullscreen window. Fits with phase 4 (6.8) and
-  overlays (6.6).
+  instead of being unfullscreened or suspended. While another window has focus
+  the fullscreen one sits behind the tiles (`fsontop()`). Fits with phase 4 (6.8)
+  and overlays (6.6).
 
 ## Progress
 

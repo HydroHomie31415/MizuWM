@@ -140,6 +140,7 @@ typedef struct {
 	struct wlr_box prev; /* layout-relative, includes border */
 	struct wlr_box floatgeom; /* last floating geometry, restored on float */
 	struct wlr_box bounds; /* only width and height are used */
+	struct wlr_box slot; /* scroller place of a fullscreen or maximized tile */
 	union {
 		struct wlr_xdg_surface *xdg;
 	} surface;
@@ -328,6 +329,7 @@ static void destroynotify(struct wl_listener *listener, void *data);
 static void destroypointerconstraint(struct wl_listener *listener, void *data);
 static void destroysessionlock(struct wl_listener *listener, void *data);
 static void destroykeyboardgroup(struct wl_listener *listener, void *data);
+static struct wlr_box dirbox(Client *c);
 static Client *dirclient(Client *sel, enum wlr_direction dir, int tiled);
 static Monitor *dirtomon(enum wlr_direction dir);
 static Client *droptarget(Client *c, Monitor *m, int *dir);
@@ -336,6 +338,7 @@ static void focusclient(Client *c, LayerSurface *l, int lift);
 static void focusdir(const Arg *arg);
 static void focusmon(const Arg *arg);
 static Client *focustop(Monitor *m);
+static int fsontop(Client *c);
 static void fullscreennotify(struct wl_listener *listener, void *data);
 static void gpureset(struct wl_listener *listener, void *data);
 static void handlesig(int signo);
@@ -635,7 +638,7 @@ applyrules(Client *c)
 void
 arrange(Monitor *m)
 {
-	Client *c;
+	Client *c, *p;
 
 	if (!m->wlr_output->enabled)
 		return;
@@ -656,12 +659,22 @@ arrange(Monitor *m)
 	wlr_scene_node_set_enabled(&m->fullscreen_bg->node,
 			&c->flink != &fstack && c->isfullscreen);
 
+	wl_list_for_each(c, &clients, link) {
+		p = client_get_parent(c);
+		if (c->mon != m || !(c->isfullscreen || (p && p->isfullscreen)))
+			continue;
+		wlr_scene_node_reparent(&c->scene->node, clientlayer(c));
+		if (c->scene->node.parent == layers[LyrTile])
+			wlr_scene_node_lower_to_bottom(&c->scene->node);
+	}
+
 	strncpy(m->ltsymbol, LAYOUT(m)->symbol, LENGTH(m->ltsymbol));
 
 	/* We move all clients (except fullscreen) to LyrTile while
 	 * in floating layout to avoid "real" floating clients be always on top */
 	wl_list_for_each(c, &clients, link) {
-		if (c->mon != m || c->scene->node.parent == layers[LyrFS] || c->isoverlay)
+		if (c->mon != m || c->scene->node.parent == layers[LyrFS] || c->isoverlay
+				|| c->isfullscreen)
 			continue;
 
 		wlr_scene_node_reparent(&c->scene->node,
@@ -988,8 +1001,9 @@ clientlayer(Client *c)
 	/* Dialogs share their parent's layer above the tiles */
 	Client *p = client_get_parent(c);
 	return layers[c->isoverlay || (p && p->isoverlay) ? LyrAboveFS
-			: c->isfullscreen || (p && p->isfullscreen) ? LyrFS
-			: c->isfloating || c->ismaximized ? LyrFloat : LyrTile];
+			: fsontop(c) || (p && fsontop(p)) ? LyrFS
+			: (c->isfloating || c->ismaximized) && !c->isfullscreen ? LyrFloat
+			: LyrTile];
 }
 
 void
@@ -1645,24 +1659,33 @@ destroykeyboardgroup(struct wl_listener *listener, void *data)
 	free(group);
 }
 
+struct wlr_box
+dirbox(Client *c)
+{
+	/* A fullscreen or maximized tile is found at its place in the strip */
+	return (c->isfullscreen || c->ismaximized) && !c->isfloating
+			&& LAYOUT(c->mon)->arrange == scroller ? c->slot : c->geom;
+}
+
 Client *
 dirclient(Client *sel, enum wlr_direction dir, int tiled)
 {
 	/* Nearest window in dir that overlaps sel on the other axis */
 	Client *c, *best = NULL;
+	struct wlr_box s = dirbox(sel), b;
 	long d, perp, score, bestscore = LONG_MAX;
 	int h = dir == WLR_DIRECTION_LEFT || dir == WLR_DIRECTION_RIGHT;
-	int sx = sel->geom.x + sel->geom.width / 2, sy = sel->geom.y + sel->geom.height / 2;
+	int sx = s.x + s.width / 2, sy = s.y + s.height / 2;
 	int cx, cy;
 
 	wl_list_for_each(c, &clients, link) {
-		if (c == sel || !VISIBLEON(c, sel->mon) || c->isfullscreen
-				|| (tiled && c->isfloating))
+		if (c == sel || !VISIBLEON(c, sel->mon) || (tiled && c->isfloating))
 			continue;
-		cx = c->geom.x + c->geom.width / 2;
-		cy = c->geom.y + c->geom.height / 2;
-		if (h ? c->geom.y >= sel->geom.y + sel->geom.height || sel->geom.y >= c->geom.y + c->geom.height
-				: c->geom.x >= sel->geom.x + sel->geom.width || sel->geom.x >= c->geom.x + c->geom.width)
+		b = dirbox(c);
+		cx = b.x + b.width / 2;
+		cy = b.y + b.height / 2;
+		if (h ? b.y >= s.y + s.height || s.y >= b.y + b.height
+				: b.x >= s.x + s.width || s.x >= b.x + b.width)
 			continue;
 		switch (dir) {
 		case WLR_DIRECTION_LEFT: d = sx - cx; break;
@@ -1682,7 +1705,7 @@ dirclient(Client *sel, enum wlr_direction dir, int tiled)
 	if (best && LAYOUT(sel->mon)->arrange == scroller && !sel->isfloating
 			&& !best->isfloating && best->column != sel->column) {
 		wl_list_for_each(c, &fstack, flink) {
-			if (VISIBLEON(c, sel->mon) && !c->isfloating && !c->isfullscreen
+			if (VISIBLEON(c, sel->mon) && !c->isfloating
 					&& c->column == best->column)
 				return c;
 		}
@@ -1818,7 +1841,7 @@ focusclient(Client *c, LayerSurface *l, int lift)
 {
 	struct wlr_surface *surface, *old = seat->keyboard_state.focused_surface;
 	int unused_lx, unused_ly, old_client_type;
-	Client *old_c = NULL;
+	Client *w, *old_c = NULL;
 	LayerSurface *old_l = NULL;
 
 	if (locked)
@@ -1843,8 +1866,13 @@ focusclient(Client *c, LayerSurface *l, int lift)
 		wl_list_insert(&fstack, &c->flink);
 		selmon = c->mon;
 		c->isurgent = 0;
-		/* Scroll the focused column into view */
-		if (!c->isfloating && LAYOUT(c->mon)->arrange == scroller)
+		/* Scroll the focused column into view, and put fullscreen
+		 * windows in front of or behind the others */
+		wl_list_for_each(w, &clients, link)
+			if (VISIBLEON(w, c->mon) && w->isfullscreen)
+				break;
+		if ((!c->isfloating && LAYOUT(c->mon)->arrange == scroller)
+				|| &w->link != &clients)
 			arrange(c->mon);
 
 		/* Don't change border color if there is an exclusive focus or we are
@@ -1902,7 +1930,7 @@ void
 focusdir(const Arg *arg)
 {
 	Client *c, *sel = focustop(selmon);
-	if (!sel || sel->isfullscreen || !(c = dirclient(sel, arg->i, 0)))
+	if (!sel || !(c = dirclient(sel, arg->i, 0)))
 		return;
 	focusclient(c, NULL, 1);
 	warpto(&c->geom);
@@ -1934,6 +1962,21 @@ focustop(Monitor *m)
 			return c;
 	}
 	return NULL;
+}
+
+int
+fsontop(Client *c)
+{
+	/* A fullscreen window covers its monitor while it, its dialog or an
+	 * overlay has focus. Otherwise it goes behind the tiles, still shown
+	 * and live, like borderless windowed on Windows. */
+	Client *f;
+	if (!c->isfullscreen)
+		return 0;
+	wl_list_for_each(f, &fstack, flink)
+		if (VISIBLEON(f, c->mon) && !f->isoverlay)
+			return f == c || client_get_parent(f) == c;
+	return 0;
 }
 
 void
@@ -3210,8 +3253,9 @@ scroller(Monitor *m)
 		for (k = i, y = m->w.y; k < j; k++, y += h) {
 			h = k == j - 1 ? m->w.y + m->w.height - y
 					: (int)roundf(m->w.height * v[k]->cfact / sum);
+			v[k]->slot = (struct wlr_box){.x = x, .y = y, .width = w, .height = h};
 			if (!v[k]->isfullscreen && !v[k]->ismaximized)
-				resize(v[k], (struct wlr_box){.x = x, .y = y, .width = w, .height = h}, 0);
+				resize(v[k], v[k]->slot, 0);
 		}
 	}
 	free(v);
@@ -3821,7 +3865,8 @@ void
 swapdir(const Arg *arg)
 {
 	Client *c, *sel = focustop(selmon);
-	if (!sel || sel->isfloating || sel->isfullscreen || !(c = dirclient(sel, arg->i, 1)))
+	if (!sel || sel->isfloating || sel->isfullscreen || !(c = dirclient(sel, arg->i, 1))
+			|| c->isfullscreen)
 		return;
 	swapclients(sel, c);
 	arrange(selmon);
