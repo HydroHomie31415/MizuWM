@@ -2934,8 +2934,8 @@ void
 resize(Client *c, struct wlr_box geo, int interact)
 {
 	struct wlr_box *bbox;
-	struct wlr_box clip, mclip, *m;
-	int i, inside;
+	struct wlr_box clip, mclip, *m, bb[4];
+	int i;
 
 	if (!c->mon || !client_surface(c)->mapped)
 		return;
@@ -2948,26 +2948,29 @@ resize(Client *c, struct wlr_box geo, int interact)
 	applybounds(c, c->isfloating || interact ? bbox : NULL);
 	if (c->isfloating && !c->isfullscreen && !c->ismaximized && !(c == grabc && grabtile))
 		c->floatgeom = c->geom;
+	bb[0] = (struct wlr_box){0, 0, c->geom.width, (int)c->bw};
+	bb[1] = (struct wlr_box){0, c->geom.height - (int)c->bw, c->geom.width, (int)c->bw};
+	bb[2] = (struct wlr_box){0, (int)c->bw, (int)c->bw, c->geom.height - 2 * (int)c->bw};
+	bb[3] = (struct wlr_box){c->geom.width - (int)c->bw, (int)c->bw, (int)c->bw, c->geom.height - 2 * (int)c->bw};
 
 	/* Update scene-graph, including borders */
 	wlr_scene_node_set_position(&c->scene->node, c->geom.x, c->geom.y);
 	wlr_scene_node_set_position(&c->scene_surface->node, c->bw, c->bw);
-	wlr_scene_rect_set_size(c->border[0], c->geom.width, c->bw);
-	wlr_scene_rect_set_size(c->border[1], c->geom.width, c->bw);
-	wlr_scene_rect_set_size(c->border[2], c->bw, c->geom.height - 2 * c->bw);
-	wlr_scene_rect_set_size(c->border[3], c->bw, c->geom.height - 2 * c->bw);
-	wlr_scene_node_set_position(&c->border[1]->node, 0, c->geom.height - c->bw);
-	wlr_scene_node_set_position(&c->border[2]->node, 0, c->bw);
-	wlr_scene_node_set_position(&c->border[3]->node, c->geom.width - c->bw, c->bw);
+	for (i = 0; i < 4; i++) {
+		bb[i].x += c->geom.x;
+		bb[i].y += c->geom.y;
+		/* Don't let a column hanging off this monitor draw on its neighbour */
+		if (!c->isfloating)
+			wlr_box_intersection(&bb[i], &bb[i], &c->mon->m);
+		wlr_scene_node_set_enabled(&c->border[i]->node, !wlr_box_empty(&bb[i]));
+		wlr_scene_node_set_position(&c->border[i]->node, bb[i].x - c->geom.x, bb[i].y - c->geom.y);
+		wlr_scene_rect_set_size(c->border[i], bb[i].width, bb[i].height);
+	}
 
 	client_set_size(c, c->geom.width - 2 * c->bw, c->geom.height - 2 * c->bw);
 	client_get_clip(c, &clip);
 	if (!c->isfloating) {
-		/* Don't let a column hanging off this monitor draw on its neighbour */
 		m = &c->mon->m;
-		inside = c->geom.x >= m->x && c->geom.y >= m->y
-				&& c->geom.x + c->geom.width <= m->x + m->width
-				&& c->geom.y + c->geom.height <= m->y + m->height;
 		mclip = (struct wlr_box){
 			.x = m->x - c->geom.x - (int)c->bw + clip.x,
 			.y = m->y - c->geom.y - (int)c->bw + clip.y,
@@ -2976,8 +2979,6 @@ resize(Client *c, struct wlr_box geo, int interact)
 		};
 		wlr_scene_node_set_enabled(&c->scene->node, VISIBLEON(c, c->mon)
 				&& wlr_box_intersection(&mclip, &clip, &mclip));
-		for (i = 0; i < 4; i++)
-			wlr_scene_node_set_enabled(&c->border[i]->node, inside);
 		clip = mclip;
 	}
 	wlr_scene_subsurface_tree_set_clip(&c->scene_surface->node, &clip);
