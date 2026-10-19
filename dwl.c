@@ -1808,9 +1808,20 @@ focusclient(Client *c, LayerSurface *l, int lift)
 void
 focusdir(const Arg *arg)
 {
-	Client *c, *sel = focustop(selmon);
+	Client *c, *t, *sel = focustop(selmon);
 	if (!sel || sel->isfullscreen || !(c = dirclient(sel, arg->i, 0)))
 		return;
+	/* Entering another scroller column focuses the window last focused
+	 * in it, like mango */
+	if (LAYOUT(selmon)->arrange == scroller && !sel->isfloating
+			&& !c->isfloating && c->column != sel->column) {
+		wl_list_for_each(t, &fstack, flink) {
+			if (VISIBLEON(t, selmon) && !t->isfloating && t->column == c->column) {
+				c = t;
+				break;
+			}
+		}
+	}
 	focusclient(c, NULL, 1);
 	warpto(&c->geom);
 }
