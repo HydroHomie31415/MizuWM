@@ -2947,7 +2947,7 @@ scroller(Monitor *m)
 	/* Columns on an infinite horizontal strip. The focused column keeps its
 	 * place on screen while fully visible, otherwise the strip scrolls just
 	 * enough to show it (DESIGN.md 6.2). */
-	Client *c, *f, *ref = NULL, *anchor, **v;
+	Client *c, *f, *ref = NULL, *anchor, *nb = NULL, **v;
 	int i, j, k, n = 0, nu = 0, ncols, maxcol = -1, scroll, x, y, h, w;
 	int fx = 0, fw = 0, ax = 0;
 	float sum;
@@ -3010,6 +3010,8 @@ scroller(Monitor *m)
 			fx = x;
 			fw = w;
 		}
+		if (f && v[i]->column == (f->column ? ncols - 2 : 1))
+			nb = v[i];
 		x += w;
 	}
 	scroll = anchor ? ax - (anchor->geom.x - m->w.x) : 0;
@@ -3017,6 +3019,12 @@ scroller(Monitor *m)
 		scroll = fx;
 	else if (fx + fw > scroll + m->w.width)
 		scroll = fx + fw - m->w.width;
+	/* mango's scroller_prefer_overspread: the first or last column goes to
+	 * its screen edge unless its neighbour already shows in full beside it */
+	if (nb && f->proportion < 1.0f && (f->column == 0 || f->column == ncols - 1)
+			&& (nb->geom.x < m->m.x || nb->geom.x + nb->geom.width > m->m.x + m->m.width
+			|| nb->proportion + f->proportion >= 1.0f))
+		scroll = f->column ? fx + fw - m->w.width : fx;
 
 	for (i = 0, x = m->w.x - scroll; i < n; i = j, x += w) {
 		w = ncols == 1 ? m->w.width : (int)roundf(v[i]->proportion * m->w.width);
