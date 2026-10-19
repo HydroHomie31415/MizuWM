@@ -308,6 +308,7 @@ static void destroysessionlock(struct wl_listener *listener, void *data);
 static void destroykeyboardgroup(struct wl_listener *listener, void *data);
 static Client *dirclient(Client *sel, enum wlr_direction dir, int tiled);
 static Monitor *dirtomon(enum wlr_direction dir);
+static void droptile(Client *c);
 static void focusclient(Client *c, LayerSurface *l, int lift);
 static void focusdir(const Arg *arg);
 static void focusmon(const Arg *arg);
@@ -453,6 +454,7 @@ static Client *grabc;
 static int grabcx, grabcy; /* client-relative */
 static struct wlr_box grabgeom; /* tiled resize: geometry and size share at grab */
 static float grabp;
+static int grabtile; /* moved window was tiled, drop it back into the layout */
 
 static struct wlr_output_layout *output_layout;
 static struct wlr_box sgeom;
@@ -766,6 +768,8 @@ buttonpress(struct wl_listener *listener, void *data)
 			selmon = xytomon(cursor->x, cursor->y);
 			if (grabc->isfloating)
 				setmon(grabc, selmon, 0);
+			if (grabtile && grabc->isfloating)
+				droptile(grabc);
 			grabc = NULL;
 			return;
 		}
@@ -1611,6 +1615,74 @@ dirtomon(enum wlr_direction dir)
 }
 
 void
+droptile(Client *c)
+{
+	/* Tile c again next to the tiled window under or nearest the cursor, on
+	 * the side of that window's nearest edge: a new column left or right of
+	 * it, or above or below it in its column. Tile: before or after it. */
+	Monitor *m = c->mon;
+	Client *t, *near = NULL;
+	long d, best = LONG_MAX;
+	double rx, ry;
+	int dir, before, newcol;
+
+	if (!VISIBLEON(c, m)) /* the view changed mid-drag */
+		c->tags = m->tagset[m->seltags];
+	wl_list_for_each(t, &clients, link) {
+		if (t == c || !VISIBLEON(t, m) || t->isfloating || t->isfullscreen)
+			continue;
+		rx = cursor->x - t->geom.x;
+		ry = cursor->y - t->geom.y;
+		if (rx >= 0 && rx < t->geom.width && ry >= 0 && ry < t->geom.height) {
+			near = t;
+			break;
+		}
+		rx -= t->geom.width / 2.0;
+		ry -= t->geom.height / 2.0;
+		if ((d = (long)(rx * rx + ry * ry)) < best) {
+			near = t;
+			best = d;
+		}
+	}
+	if (!near) {
+		setfloating(c, 0);
+		return;
+	}
+
+	rx = cursor->x - near->geom.x;
+	ry = cursor->y - near->geom.y;
+	if (rx <= near->geom.width - rx && rx <= ry && rx <= near->geom.height - ry)
+		dir = WLR_DIRECTION_LEFT;
+	else if (near->geom.width - rx <= ry && near->geom.width - rx <= near->geom.height - ry)
+		dir = WLR_DIRECTION_RIGHT;
+	else
+		dir = ry <= near->geom.height - ry ? WLR_DIRECTION_UP : WLR_DIRECTION_DOWN;
+	before = dir == WLR_DIRECTION_LEFT || dir == WLR_DIRECTION_UP;
+
+	if (LAYOUT(m)->arrange == scroller) {
+		newcol = dir == WLR_DIRECTION_LEFT || dir == WLR_DIRECTION_RIGHT;
+		c->column = near->column + (newcol && !before);
+		c->row = newcol ? 0 : near->row + !before;
+		if (!newcol)
+			c->proportion = near->proportion;
+		wl_list_for_each(t, &clients, link) {
+			if (t == c || !VISIBLEON(t, m) || t->isfloating)
+				continue;
+			if (newcol && t->column >= c->column)
+				t->column++;
+			else if (!newcol && t->column == c->column && t->row >= c->row)
+				t->row++;
+		}
+		/* Where the strip keeps the focused column on screen */
+		c->geom.x = near->geom.x + (dir == WLR_DIRECTION_RIGHT ? near->geom.width : 0);
+	} else {
+		wl_list_remove(&c->link);
+		wl_list_insert(before ? near->link.prev : &near->link, &c->link);
+	}
+	setfloating(c, 0);
+}
+
+void
 focusclient(Client *c, LayerSurface *l, int lift)
 {
 	struct wlr_surface *surface, *old = seat->keyboard_state.focused_surface;
@@ -2205,8 +2277,14 @@ moveresize(const Arg *arg)
 		return;
 	}
 
-	/* Float the window and tell motionnotify to grab it */
+	/* Float the window and tell motionnotify to grab it. A tiled window
+	 * shrinks under the cursor and goes back into the layout on release,
+	 * like mango's drag_tile_to_tile. */
+	grabtile = arg->ui == CurMove && !grabc->isfloating;
 	setfloating(grabc, 1);
+	if (grabtile)
+		resize(grabc, (struct wlr_box){.x = (int)round(cursor->x) - 150,
+				.y = (int)round(cursor->y) - 150, .width = 300, .height = 300}, 1);
 	switch (cursor_mode = arg->ui) {
 	case CurMove:
 		grabcx = (int)round(cursor->x) - grabc->geom.x;
@@ -2939,7 +3017,8 @@ setfloating(Client *c, int floating)
 {
 	Client *p = client_get_parent(c);
 	c->isfloating = floating;
-	c->column = -1;
+	if (floating) /* tiling again keeps a slot set by droptile() */
+		c->column = -1;
 	/* If in floating layout do not change the client's layer */
 	if (!c->mon || !client_surface(c)->mapped || !LAYOUT(c->mon)->arrange)
 		return;
