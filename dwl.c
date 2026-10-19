@@ -233,6 +233,7 @@ typedef struct {
 	const Layout *lt;
 	enum wl_output_transform rr;
 	int x, y;
+	int w, h, refresh;   /* mode, refresh in mHz; 0 means the preferred mode */
 } MonitorRule;
 
 typedef struct {
@@ -328,6 +329,9 @@ static void killclient(const Arg *arg);
 static void locksession(struct wl_listener *listener, void *data);
 static void mapnotify(struct wl_listener *listener, void *data);
 static void maximizenotify(struct wl_listener *listener, void *data);
+static const MonitorRule *monrule(struct wlr_output *o);
+static void monrulestate(struct wlr_output *o, const MonitorRule *r,
+		struct wlr_output_state *state);
 static void motionabsolute(struct wl_listener *listener, void *data);
 static void motionnotify(uint32_t time, struct wlr_input_device *device, double sx,
 		double sy, double sx_unaccel, double sy_unaccel);
@@ -1212,33 +1216,21 @@ createmon(struct wl_listener *listener, void *data)
 	wlr_output_state_init(&state);
 	/* Initialize monitor state using configured rules */
 	m->tagset[0] = m->tagset[1] = 1;
-	for (r = monrules; r < END(monrules); r++) {
-		if (!r->name || strstr(wlr_output->name, r->name)) {
-			m->m.x = r->x;
-			m->m.y = r->y;
-			m->mfact = r->mfact;
-			m->nmaster = r->nmaster;
-			for (i = 0; i < LENGTH(m->lt); i++)
-				m->lt[i] = r->lt;
-			strncpy(m->ltsymbol, r->lt->symbol, LENGTH(m->ltsymbol));
-			wlr_output_state_set_scale(&state, r->scale);
-			wlr_output_state_set_transform(&state, r->rr);
-			break;
-		}
-	}
-
-	/* The mode is a tuple of (width, height, refresh rate), and each
-	 * monitor supports only a specific set of modes. We just pick the
-	 * monitor's preferred mode; a more sophisticated compositor would let
-	 * the user configure it. */
-	wlr_output_state_set_mode(&state, wlr_output_preferred_mode(wlr_output));
+	r = monrule(wlr_output);
+	m->m.x = r->x;
+	m->m.y = r->y;
+	m->mfact = r->mfact;
+	m->nmaster = r->nmaster;
+	for (i = 0; i < LENGTH(m->lt); i++)
+		m->lt[i] = r->lt;
+	strncpy(m->ltsymbol, r->lt->symbol, LENGTH(m->ltsymbol));
+	monrulestate(wlr_output, r, &state);
 
 	/* Set up event listeners */
 	LISTEN(&wlr_output->events.frame, &m->frame, rendermon);
 	LISTEN(&wlr_output->events.destroy, &m->destroy, cleanupmon);
 	LISTEN(&wlr_output->events.request_state, &m->request_state, requestmonstate);
 
-	wlr_output_state_set_enabled(&state, 1);
 	wlr_output_commit_state(wlr_output, &state);
 	wlr_output_state_finish(&state);
 
@@ -2187,6 +2179,33 @@ maximizenotify(struct wl_listener *listener, void *data)
 			&& wl_resource_get_version(c->surface.xdg->toplevel->resource)
 					< XDG_TOPLEVEL_WM_CAPABILITIES_SINCE_VERSION)
 		wlr_xdg_surface_schedule_configure(c->surface.xdg);
+}
+
+const MonitorRule *
+monrule(struct wlr_output *o)
+{
+	/* The last rule is the default */
+	const MonitorRule *r;
+	for (r = monrules; r < END(monrules) - 1; r++)
+		if (!r->name || strstr(o->name, r->name))
+			break;
+	return r;
+}
+
+void
+monrulestate(struct wlr_output *o, const MonitorRule *r, struct wlr_output_state *state)
+{
+	/* Enable o with r's mode, the nearest refresh at r's size */
+	struct wlr_output_mode *mode, *best = NULL;
+
+	wl_list_for_each(mode, &o->modes, link)
+		if (mode->width == r->w && mode->height == r->h && (!best
+				|| abs(mode->refresh - r->refresh) < abs(best->refresh - r->refresh)))
+			best = mode;
+	wlr_output_state_set_mode(state, best ? best : wlr_output_preferred_mode(o));
+	wlr_output_state_set_scale(state, r->scale);
+	wlr_output_state_set_transform(state, r->rr);
+	wlr_output_state_set_enabled(state, 1);
 }
 
 void
