@@ -36,6 +36,6 @@ Decided by the user where mywm deliberately differs from mango:
 - [x] Phase 0: Bootstrap
 - [x] Phase 1: No X, satellite supervision
 - [x] Phase 2: Scroller layout and keybinds
-- [ ] Phase 3: IPC, shell integration, real hardware
+- [x] Phase 3: IPC, shell integration, real hardware
 - [ ] Phase 4: Gaming
 - [ ] Phase 5: Polish
