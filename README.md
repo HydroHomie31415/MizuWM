@@ -55,7 +55,7 @@ holding a JSON array of strings; each reply is one line of JSON, and errors are
 
     mywmctl get outputs|clients|focused|cursor
     mywmctl output DP-1 off             # on restores the monitor rule's mode and position
-    mywmctl set animations 0            # no-op until phase 5
+    mywmctl set animations 0            # off for a game session; reload turns it back on
     mywmctl dispatch view 3             # any action in ipc.h, e.g. toggle_scratchpad term
     mywmctl reload                      # outputs back to their rules, toggles to defaults
     mywmctl subscribe                   # current state, then focus/tags/output/open/close events

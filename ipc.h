@@ -57,7 +57,7 @@ static const Action actions[] = {
 	{ "quit",                 quit,                  ActNone,    {0} },
 };
 
-static int animations = 1; /* no-op until phase 5 */
+static int animations = 1; /* off skips and finishes all animations */
 static int ipcfd = -1;
 static char ipcpath[sizeof(((struct sockaddr_un *)0)->sun_path)];
 static struct wl_event_source *ipcsource, *ipcreaper;

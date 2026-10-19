@@ -241,7 +241,7 @@ Minimum command set (derived from what my scripts call on `mmsg` today):
 |---|---|---|
 | `get outputs` | `game-session` | name, enabled, mode, position, vrr state, focused |
 | `output <name> on\|off` | `game-session --single-monitor` | Enable/disable an output, restoring mode and position from config |
-| `set animations <0\|1>` | `game-session` | Runtime toggle (no-op until phase 5) |
+| `set animations <0\|1>` | `game-session` | Runtime toggle; off finishes running animations at once |
 | `get clients` | scratchpads | app_id, title, tag, output, geometry, floating, fullscreen, visible, scratchpad name |
 | `get focused` | `mango-screenshot window` | Focused client geometry |
 | `get cursor` | `mango-screenshot output` | Cursor position and output name |
