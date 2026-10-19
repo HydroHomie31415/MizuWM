@@ -351,6 +351,7 @@ static void requestmonstate(struct wl_listener *listener, void *data);
 static void resize(Client *c, struct wlr_box geo, int interact);
 static void resizecolumn(Client *sel, float p, int hgt);
 static void resizetiled(int dx, int dy);
+static int rowedge(Client *c, int dy, int upper);
 static void resizewin(const Arg *arg);
 static void scroller(Monitor *m);
 static int rulematches(Client *c, const Rule *r);
@@ -2764,7 +2765,23 @@ resizewin(const Arg *arg)
 	}
 	if (LAYOUT(selmon)->arrange == scroller)
 		resizecolumn(sel, sel->proportion + d[0] / (float)selmon->w.width,
-				sel->geom.height + d[1]);
+				sel->geom.height + rowedge(sel, d[1], 0));
+}
+
+int
+rowedge(Client *c, int dy, int upper)
+{
+	/* Height change for moving c's free edge by dy, as in mango: the top
+	 * window of a stack moves its bottom edge, the bottom window its top
+	 * edge, others the edge on the grabbed side (upper) */
+	Client *t;
+	int last = c->row > 0;
+
+	wl_list_for_each(t, &clients, link)
+		if (VISIBLEON(t, c->mon) && !t->isfloating && t->column == c->column
+				&& t->row > c->row)
+			last = 0;
+	return last || (c->row > 0 && upper) ? -dy : dy;
 }
 
 void
@@ -2794,8 +2811,8 @@ resizecolumn(Client *sel, float p, int hgt)
 void
 resizetiled(int dx, int dy)
 {
-	/* Super+right-drag on a tiled window. Scroller: grow towards the cursor
-	 * from the half the window was grabbed in, like mango. Tile: move the
+	/* Super+right-drag on a tiled window. Scroller: grow the column towards
+	 * the cursor from the half it was grabbed in, like mango. Tile: move the
 	 * master split. */
 	Monitor *m = grabc->mon;
 
@@ -2805,7 +2822,7 @@ resizetiled(int dx, int dy)
 	} else if (LAYOUT(m)->arrange == scroller) {
 		resizecolumn(grabc, grabp + (grabcx < grabgeom.width / 2 ? -dx : dx)
 				/ (float)m->w.width,
-				grabgeom.height + (grabcy < grabgeom.height / 2 ? -dy : dy));
+				grabgeom.height + rowedge(grabc, dy, grabcy < grabgeom.height / 2));
 	}
 }
 
