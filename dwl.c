@@ -339,6 +339,8 @@ static void focusdir(const Arg *arg);
 static void focusmon(const Arg *arg);
 static Client *focustop(Monitor *m);
 static int fsontop(Client *c);
+static void hiddenframe(struct wlr_scene_buffer *buffer, int sx, int sy, void *data);
+static int hiddenframes(void *data);
 static void fullscreennotify(struct wl_listener *listener, void *data);
 static void gpureset(struct wl_listener *listener, void *data);
 static void handlesig(int signo);
@@ -444,6 +446,8 @@ static pid_t satellite_pid = -1;
 static int satellite_pidfd = -1, satellite_backoff = 1;
 static struct timespec satellite_started;
 static struct wl_event_source *satellite_timer, *satellite_exit;
+static struct wl_event_source *hidden_timer;
+static int hidden_armed;
 static int xdisplay = -1, xsocks[2] = {-1, -1}; /* abstract, filesystem */
 static int locked;
 static unsigned int lastclientid;
@@ -907,6 +911,7 @@ cleanup(void)
 	ipccleanup();
 	cleanuplisteners();
 	stopsatellite();
+	wl_event_source_remove(hidden_timer);
 	wl_display_destroy_clients(dpy);
 	if (child_pid > 0) {
 		kill(-child_pid, SIGTERM);
@@ -1980,6 +1985,42 @@ fsontop(Client *c)
 }
 
 void
+hiddenframe(struct wlr_scene_buffer *buffer, int sx, int sy, void *data)
+{
+	struct wlr_scene_surface *s;
+	struct timespec now;
+
+	if (buffer->primary_output || !(s = wlr_scene_surface_try_from_buffer(buffer)))
+		return;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	wlr_surface_send_frame_done(s->surface, &now);
+	*(int *)data = 1;
+}
+
+int
+hiddenframes(void *data)
+{
+	/* wlr_scene only sends frame callbacks to buffers it shows, so a
+	 * fullscreen game fully covered by tiles would stall on its next
+	 * present. Pace its hidden buffers at the monitor's refresh instead. */
+	Client *c;
+	int hidden, r, refresh = 0;
+
+	wl_list_for_each(c, &clients, link) {
+		if (!c->isfullscreen || !VISIBLEON(c, c->mon))
+			continue;
+		hidden = 0;
+		wlr_scene_node_for_each_buffer(&c->scene_surface->node, hiddenframe, &hidden);
+		r = c->mon->wlr_output->refresh;
+		if (hidden)
+			refresh = MAX(refresh, r > 0 ? r : 60000);
+	}
+	if ((hidden_armed = refresh > 0))
+		wl_event_source_timer_update(hidden_timer, MAX(1, 1000000 / refresh));
+	return 0;
+}
+
+void
 fullscreennotify(struct wl_listener *listener, void *data)
 {
 	Client *c = wl_container_of(listener, c, fullscreen);
@@ -2787,6 +2828,8 @@ rendermon(struct wl_listener *listener, void *data)
 	Monitor *m = wl_container_of(listener, m, frame);
 	struct timespec now;
 
+	if (!hidden_armed)
+		hiddenframes(NULL);
 	if (!wlr_scene_output_needs_frame(m->scene_output)) {
 		return;
 	}
@@ -3596,6 +3639,7 @@ setup(void)
 	 */
 	wl_list_init(&clients);
 	wl_list_init(&fstack);
+	hidden_timer = wl_event_loop_add_timer(event_loop, hiddenframes, NULL);
 
 	xdg_shell = wlr_xdg_shell_create(dpy, 6);
 	wl_signal_add(&xdg_shell->events.new_toplevel, &new_xdg_toplevel);
