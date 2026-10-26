@@ -43,8 +43,9 @@ static const char *const sessionenv[][2] = {
  * the session environment to D-Bus activated services such as portals. */
 static const char *const autostart[] = {
 	"dbus-update-activation-environment --systemd WAYLAND_DISPLAY DISPLAY "
-		"XDG_CURRENT_DESKTOP XDG_SESSION_TYPE MYWM_SOCKET",
-	"noctalia",
+		"XDG_CURRENT_DESKTOP XDG_SESSION_TYPE MYWM_SOCKET "
+		"MANGO_INSTANCE_SIGNATURE",
+	"dms run",
 	"gnome-keyring-daemon --start --components=secrets",
 };
 
@@ -57,7 +58,7 @@ static const Rule rules[] = {
 	{ .id = "^(org\\.gnome\\.Calculator|gnome-calculator|galculator|blueman-manager|org\\.gnome\\.Nautilus|xdg-desktop-portal.*|zoom)$",
 	  .isfloating = 1 },
 	{ .id = "^(firefox|zen)$", .title = "^Picture-in-Picture$", .isfloating = 1 },
-	{ .id = "^dev\\.noctalia\\.Noctalia$", .isfloating = 1, .width = 1080, .height = 920 },
+	{ .id = "^(dev\\.duxlabs\\.shell|com\\.danklinux\\.dms)$", .isfloating = 1 },
 	{ .id = "^steam$", .title = "^notificationtoasts_[0-9]+_desktop$",
 	  .isfloating = 1, .nofocus = 1, .offx = 100, .offy = 100 },
 	{ .id = "^steam$", .nomapfs = 1 },
@@ -173,24 +174,24 @@ static const enum libinput_config_tap_button_map button_map = LIBINPUT_CONFIG_TA
 
 /* helper for spawning shell commands in the pre dwm-5.0 fashion */
 #define SHCMD(cmd) { .v = (const char*[]){ "/bin/sh", "-c", cmd, NULL } }
-#define NOCTALIA(args) SHCMD("noctalia msg " args)
+#define DMS(args) SHCMD("dms ipc call " args)
 #define BIN(cmd) SHCMD("$HOME/.local/bin/" cmd)
 
 static const Key keys[] = {
 	/* modifier            key                   function              argument */
 	{ MODKEY,              XKB_KEY_g,            spawn,                BIN("game-session") },
 	{ MODKEY|SHIFTKEY,     XKB_KEY_g,            spawn,                BIN("game-session --single-monitor") },
-	{ MODKEY,              XKB_KEY_space,        spawn,                NOCTALIA("panel-toggle launcher") },
-	{ MODKEY,              XKB_KEY_s,            spawn,                NOCTALIA("panel-toggle control-center") },
+	{ MODKEY,              XKB_KEY_space,        spawn,                DMS("spotlight toggle") },
+	{ MODKEY,              XKB_KEY_s,            spawn,                DMS("control-center toggle") },
 	{ MODKEY,              XKB_KEY_n,            togglescratch,        {.v = &scratchpads[0]} },
 	{ MODKEY,              XKB_KEY_backslash,    togglescratch,        {.v = &scratchpads[1]} },
 	{ MODKEY,              XKB_KEY_c,            togglescratch,        {.v = &scratchpads[2]} },
-	{ MODKEY,              XKB_KEY_v,            spawn,                NOCTALIA("panel-toggle clipboard") },
-	{ MODKEY,              XKB_KEY_y,            spawn,                NOCTALIA("panel-toggle wallpaper") },
-	{ MODKEY,              XKB_KEY_comma,        spawn,                NOCTALIA("settings-toggle") },
-	{ MODKEY,              XKB_KEY_x,            spawn,                NOCTALIA("panel-toggle session") },
-	{ MODKEY|ALTKEY,       XKB_KEY_l,            spawn,                NOCTALIA("session lock") },
-	{ MODKEY,              XKB_KEY_r,            spawn,                NOCTALIA("screenshot-region") },
+	{ MODKEY,              XKB_KEY_v,            spawn,                DMS("clipboard toggle") },
+	{ MODKEY,              XKB_KEY_y,            spawn,                DMS("dankdash wallpaper") },
+	{ MODKEY,              XKB_KEY_comma,        spawn,                DMS("settings focusOrToggle") },
+	{ MODKEY,              XKB_KEY_x,            spawn,                DMS("powermenu toggle") },
+	{ MODKEY|ALTKEY,       XKB_KEY_l,            spawn,                DMS("lock lock") },
+	{ MODKEY,              XKB_KEY_r,            spawn,                SHCMD("dms screenshot region") },
 	TAGKEYS(              XKB_KEY_1,           0),
 	TAGKEYS(              XKB_KEY_2,           1),
 	TAGKEYS(              XKB_KEY_3,           2),
@@ -236,7 +237,7 @@ static const Key keys[] = {
 	{ MODKEY,              XKB_KEY_minus,        resizewin,            {.v = (const int[]){ -256, 0 }} },
 	{ MODKEY|SHIFTKEY,     XKB_KEY_equal,        resizewin,            {.v = (const int[]){ 0, +144 }} },
 	{ MODKEY|SHIFTKEY,     XKB_KEY_minus,        resizewin,            {.v = (const int[]){ 0, -144 }} },
-	{ MODKEY|SHIFTKEY,     XKB_KEY_r,            spawn,                BIN("mango-screenshot save") },
+	{ MODKEY|SHIFTKEY,     XKB_KEY_r,            spawn,                SHCMD("dms screenshot full") },
 	{ MODKEY|SHIFTKEY,     XKB_KEY_t,            togglefloating,       {0} },
 	{ MODKEY,              XKB_KEY_apostrophe,   cyclelayout,          {0} },
 	{ MODKEY,              XKB_KEY_q,            killclient,           {0} },
@@ -252,17 +253,17 @@ static const Key keys[] = {
 	{ MODKEY|SHIFTKEY|CTRLKEY, XKB_KEY_Right,        tagmon,               {.i = WLR_DIRECTION_RIGHT} },
 	{ MODKEY|SHIFTKEY|CTRLKEY, XKB_KEY_Up,           tagmon,               {.i = WLR_DIRECTION_UP} },
 	{ MODKEY|SHIFTKEY|CTRLKEY, XKB_KEY_Down,         tagmon,               {.i = WLR_DIRECTION_DOWN} },
-	{ MODKEY|SHIFTKEY,     XKB_KEY_p,            spawn,                NOCTALIA("dpms-off") },
-	{ 0,                   XKB_KEY_Print,        spawn,                NOCTALIA("screenshot-region") },
-	{ CTRLKEY,             XKB_KEY_Print,        spawn,                BIN("mango-screenshot output") },
-	{ ALTKEY,              XKB_KEY_Print,        spawn,                BIN("mango-screenshot window") },
-	{ 0,                   XKB_KEY_XF86Launch1,  spawn,                NOCTALIA("screenshot-region") },
-	{ CTRLKEY,             XKB_KEY_XF86Launch1,  spawn,                BIN("mango-screenshot output") },
-	{ ALTKEY,              XKB_KEY_XF86Launch1,  spawn,                BIN("mango-screenshot window") },
+	{ MODKEY|SHIFTKEY,     XKB_KEY_p,            spawn,                SHCMD("dms dpms off") },
+	{ 0,                   XKB_KEY_Print,        spawn,                SHCMD("dms screenshot region") },
+	{ CTRLKEY,             XKB_KEY_Print,        spawn,                SHCMD("dms screenshot full") },
+	{ ALTKEY,              XKB_KEY_Print,        spawn,                SHCMD("dms screenshot window") },
+	{ 0,                   XKB_KEY_XF86Launch1,  spawn,                SHCMD("dms screenshot region") },
+	{ CTRLKEY,             XKB_KEY_XF86Launch1,  spawn,                SHCMD("dms screenshot full") },
+	{ ALTKEY,              XKB_KEY_XF86Launch1,  spawn,                SHCMD("dms screenshot window") },
 	{ MODKEY,              XKB_KEY_t,            spawn,                SHCMD("alacritty") },
-	{ MODKEY,              XKB_KEY_b,            spawn,                SHCMD("helium-browser") },
+	{ MODKEY,              XKB_KEY_b,            spawn,                SHCMD("helium") },
 	{ MODKEY,              XKB_KEY_d,            spawn,                SHCMD("equibop") },
-	{ MODKEY,              XKB_KEY_e,            spawn,                SHCMD("kumo-files") },
+	{ MODKEY,              XKB_KEY_e,            spawn,                SHCMD("dfiles open --new-window") },
 	{ MODKEY,              XKB_KEY_Tab,          overview,             {0} },
 	{ ALTKEY,              XKB_KEY_Tab,          switcher,             {.i = +1} },
 	{ ALTKEY|SHIFTKEY,     XKB_KEY_Tab,          switcher,             {.i = -1} },
@@ -280,15 +281,15 @@ static const Key keys[] = {
 
 /* Also work while the screen is locked (mango's bindl) */
 static const Key lockedkeys[] = {
-	{ 0, XKB_KEY_XF86AudioRaiseVolume,  spawn, NOCTALIA("volume-up 3") },
-	{ 0, XKB_KEY_XF86AudioLowerVolume,  spawn, NOCTALIA("volume-down 3") },
-	{ 0, XKB_KEY_XF86AudioMute,         spawn, NOCTALIA("volume-mute") },
-	{ 0, XKB_KEY_XF86AudioMicMute,      spawn, NOCTALIA("mic-mute") },
-	{ 0, XKB_KEY_XF86AudioNext,         spawn, NOCTALIA("media next") },
-	{ 0, XKB_KEY_XF86AudioPrev,         spawn, NOCTALIA("media previous") },
-	{ 0, XKB_KEY_XF86AudioPlay,         spawn, NOCTALIA("media toggle") },
-	{ 0, XKB_KEY_XF86MonBrightnessUp,   spawn, NOCTALIA("brightness-up") },
-	{ 0, XKB_KEY_XF86MonBrightnessDown, spawn, NOCTALIA("brightness-down") },
+	{ 0, XKB_KEY_XF86AudioRaiseVolume,  spawn, DMS("audio increment 3") },
+	{ 0, XKB_KEY_XF86AudioLowerVolume,  spawn, DMS("audio decrement 3") },
+	{ 0, XKB_KEY_XF86AudioMute,         spawn, DMS("audio mute") },
+	{ 0, XKB_KEY_XF86AudioMicMute,      spawn, DMS("audio micmute") },
+	{ 0, XKB_KEY_XF86AudioNext,         spawn, DMS("mpris next") },
+	{ 0, XKB_KEY_XF86AudioPrev,         spawn, DMS("mpris previous") },
+	{ 0, XKB_KEY_XF86AudioPlay,         spawn, DMS("mpris playPause") },
+	{ 0, XKB_KEY_XF86MonBrightnessUp,   spawn, DMS("brightness increment 5 \"\"") },
+	{ 0, XKB_KEY_XF86MonBrightnessDown, spawn, DMS("brightness decrement 5 \"\"") },
 };
 
 static const Button buttons[] = {
