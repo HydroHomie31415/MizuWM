@@ -38,7 +38,10 @@ installs `mywm` and `mywmctl` under `/usr/local`, the session file to
 `/usr/share/wayland-sessions/mywm.desktop` (pick "mywm" in the greeter, or run
 `mywm` from a TTY) and `mywm-portals.conf`. On real hardware mywm sets
 `XDG_CURRENT_DESKTOP=mywm`, imports the session environment into D-Bus
-activation and starts Noctalia and gnome-keyring (`autostart` in `config.h`).
+activation, starts `mywm-session.target` (which brings up `graphical-session.target`
+and with it Dux Shell; without that unit it runs `dms run` itself) and
+gnome-keyring (`autostart` in `config.h`). The session ends that target when
+mywm exits; the NixOS config provides both.
 `mywm -d` logs to `$XDG_RUNTIME_DIR/mywm.log`.
 
 Screen capture goes through xdg-desktop-portal-wlr (`mywm-portals.conf`), the

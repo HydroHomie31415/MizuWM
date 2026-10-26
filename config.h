@@ -40,12 +40,14 @@ static const char *const sessionenv[][2] = {
 	{ "XDG_SESSION_TYPE",            "wayland" },
 };
 /* Started on real hardware only, never nested or headless. The first hands
- * the session environment to D-Bus activated services such as portals. */
+ * the session environment to D-Bus activated services such as portals, then
+ * starts mywm-session.target, which brings up graphical-session.target and
+ * with it the shell (dms.service). Without that unit the shell runs directly. */
 static const char *const autostart[] = {
 	"dbus-update-activation-environment --systemd WAYLAND_DISPLAY DISPLAY "
 		"XDG_CURRENT_DESKTOP XDG_SESSION_TYPE MYWM_SOCKET "
-		"MANGO_INSTANCE_SIGNATURE",
-	"dms run",
+		"MANGO_INSTANCE_SIGNATURE; "
+		"systemctl --user start mywm-session.target || exec dms run",
 	"gnome-keyring-daemon --start --components=secrets",
 };
 
