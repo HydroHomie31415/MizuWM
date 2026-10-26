@@ -148,6 +148,7 @@ That file is the source of truth when this section is ambiguous.
   | Super+N | `md.obsidian.Obsidian` | – | `obsidian` |
   | Super+\ | `scratch-term` | – | `alacritty --class scratch-term` |
   | Super+C | `com.microsoft.VSCode` | `VS Code Scratchpad$` | `code --user-data-dir ~/.local/share/code-scratchpad --new-window` |
+  | Super+S | `spotify` | – | `spotify --enable-features=UseOzonePlatform --ozone-platform=wayland` |
 - The VS Code instance sets its title **after** mapping. Rules must be re-evaluated on
   title change for windows not yet claimed by a scratchpad.
 

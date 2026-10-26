@@ -79,6 +79,8 @@ static const Scratchpad scratchpads[] = {
 	{ "term",    "^scratch-term$",             NULL,                  "alacritty --class scratch-term" },
 	{ "vscode",  "^com\\.microsoft\\.VSCode$", "VS Code Scratchpad$",
 		"code --user-data-dir ~/.local/share/code-scratchpad --new-window" },
+	{ "spotify", "^spotify$",                  NULL,
+		"spotify --enable-features=UseOzonePlatform --ozone-platform=wayland" },
 };
 
 /* layout(s) */
@@ -182,7 +184,8 @@ static const Key keys[] = {
 	{ MODKEY,              XKB_KEY_g,            spawn,                BIN("game-session") },
 	{ MODKEY|SHIFTKEY,     XKB_KEY_g,            spawn,                BIN("game-session --single-monitor") },
 	{ MODKEY,              XKB_KEY_space,        spawn,                DMS("spotlight toggle") },
-	{ MODKEY,              XKB_KEY_s,            spawn,                DMS("control-center toggle") },
+	{ MODKEY,              XKB_KEY_s,            togglescratch,        {.v = &scratchpads[3]} },
+	{ MODKEY|SHIFTKEY,     XKB_KEY_s,            spawn,                DMS("control-center toggle") },
 	{ MODKEY,              XKB_KEY_n,            togglescratch,        {.v = &scratchpads[0]} },
 	{ MODKEY,              XKB_KEY_backslash,    togglescratch,        {.v = &scratchpads[1]} },
 	{ MODKEY,              XKB_KEY_c,            togglescratch,        {.v = &scratchpads[2]} },
