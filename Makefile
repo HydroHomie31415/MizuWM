@@ -18,7 +18,7 @@ LDLIBS    = `$(PKG_CONFIG) --libs $(PKGS)` $(WLR_LIBS) -lm $(LIBS)
 
 all: mywm mywmctl
 SRC  = dwl.c nested.c keyboard-shortcuts-inhibit-unstable-v1-protocol.c
-DEPS = $(SRC) client.h config.h ime.h ipc.h util.h config.mk cursor-shape-v1-protocol.h \
+DEPS = $(SRC) client.h config.h ime.h ipc.h mangoipc.h util.h config.mk cursor-shape-v1-protocol.h \
 	ext-image-copy-capture-v1-protocol.h \
 	keyboard-shortcuts-inhibit-unstable-v1-client-protocol.h \
 	pointer-constraints-unstable-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h \
@@ -72,7 +72,7 @@ clean:
 dist: clean
 	mkdir -p mywm-$(VERSION)
 	cp -R LICENSE* Makefile CHANGELOG.md README.md client.h config.h \
-		config.mk protocols mywm.1 dwl.c nested.c ime.h ipc.h mywmctl.c util.h mywm.desktop \
+		config.mk protocols mywm.1 dwl.c nested.c ime.h ipc.h mangoipc.h mywmctl.c util.h mywm.desktop \
 		mywm-portals.conf mywm-$(VERSION)
 	tar -caf mywm-$(VERSION).tar.gz mywm-$(VERSION)
 	rm -rf mywm-$(VERSION)

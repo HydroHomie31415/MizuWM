@@ -17,6 +17,7 @@ typedef struct {
 typedef struct {
 	struct wl_list link;
 	int fd, dead, subscribed;
+	int mango, watch, closing; /* mangoipc.h: its protocol, watch target, close once sent */
 	struct wl_event_source *source;
 	char in[4096];
 	size_t inlen;
@@ -65,6 +66,12 @@ static char ipcpath[sizeof(((struct sockaddr_un *)0)->sun_path)];
 static struct wl_event_source *ipcsource, *ipcreaper;
 static struct wl_list ipcclients;
 static char *lastfocus, *lasttags, *lastoutputs; /* last events sent */
+
+static void mangorequest(IpcClient *ic, char *line);
+static void mangoschedule(void);
+static void mangostatus(void);
+static void mangosetup(const char *display);
+static void mangocleanup(void);
 
 static void
 bputn(Buf *b, const char *s, size_t n)
@@ -290,8 +297,11 @@ ipcsend(IpcClient *ic, const char *s, size_t len)
 		}
 		n = 0;
 	}
-	if ((size_t)n == len)
+	if ((size_t)n == len) {
+		if (ic->closing)
+			ipcdrop(ic);
 		return;
+	}
 	if (ic->out.len + len - n > IPC_MAXOUT) {
 		ipcdrop(ic);
 		return;
@@ -312,7 +322,9 @@ ipcflush(IpcClient *ic)
 	}
 	memmove(ic->out.s, ic->out.s + n, ic->out.len - n);
 	ic->out.len -= n;
-	if (!ic->out.len)
+	if (!ic->out.len && ic->closing)
+		ipcdrop(ic);
+	else if (!ic->out.len)
 		wl_event_source_fd_update(ic->source, WL_EVENT_READABLE);
 }
 
@@ -394,6 +406,7 @@ ipcstatus(void)
 	Buf focus = {0}, focuskey = {0}, tags = {0}, outputs = {0};
 	int n = 0;
 
+	mangostatus();
 	wl_list_for_each(ic, &ipcclients, link)
 		n += ic->subscribed && !ic->dead;
 	if (!n)
@@ -418,6 +431,7 @@ ipcclientevent(const char *event, Client *c)
 	bputs(&b, "}\n");
 	ipcbroadcast(&b);
 	free(b.s);
+	mangoschedule();
 }
 
 static const char *
@@ -651,7 +665,10 @@ ipcread(int fd, uint32_t mask, void *data)
 		ic->in[ic->inlen] = '\0';
 		for (line = ic->in; !ic->dead && (nl = strchr(line, '\n')); line = nl + 1) {
 			*nl = '\0';
-			ipcrequest(ic, line);
+			if (ic->mango)
+				mangorequest(ic, line);
+			else
+				ipcrequest(ic, line);
 		}
 		ic->inlen -= line - ic->in;
 		memmove(ic->in, line, ic->inlen);
@@ -679,6 +696,7 @@ ipcaccept(int fd, uint32_t mask, void *data)
 	}
 	ic = ecalloc(1, sizeof(*ic));
 	ic->fd = cfd;
+	ic->mango = data != NULL;
 	ic->source = wl_event_loop_add_fd(event_loop, cfd, WL_EVENT_READABLE, ipcread, ic);
 	wl_list_insert(&ipcclients, &ic->link);
 	return 0;
@@ -708,6 +726,7 @@ ipcsetup(const char *display)
 	strcpy(ipcpath, addr.sun_path);
 	setenv("MYWM_SOCKET", ipcpath, 1);
 	ipcsource = wl_event_loop_add_fd(event_loop, ipcfd, WL_EVENT_READABLE, ipcaccept, NULL);
+	mangosetup(display);
 }
 
 static void
@@ -717,6 +736,7 @@ ipccleanup(void)
 
 	if (ipcfd < 0)
 		return;
+	mangocleanup();
 	if (ipcreaper)
 		wl_event_source_remove(ipcreaper);
 	wl_list_for_each(ic, &ipcclients, link)
@@ -730,3 +750,5 @@ ipccleanup(void)
 	close(ipcfd);
 	unlink(ipcpath);
 }
+
+#include "mangoipc.h"
