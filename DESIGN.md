@@ -91,6 +91,7 @@ Any code path that touches focus gets reviewed against this rule.
   - `MESA_DISK_CACHE_SINGLE_FILE=true`
   - `XDG_CURRENT_DESKTOP=mywm`, `XDG_SESSION_TYPE=wayland`
 - Autostart: `noctalia`, `gnome-keyring-daemon --start --components=secrets`.
+  Also `vesktop` and `steam` (on DP-1) and `helium` (on DP-3).
 
 ## 6. Layout and window management
 
@@ -163,7 +164,9 @@ change until the window has been placed.
 | app_id `firefox` or `zen`, title `Picture-in-Picture` | floating |
 | app_id `dev.noctalia.Noctalia` | floating, 1080x920 |
 | app_id `steam`, title `notificationtoasts_[0-9]+_desktop` | floating, don't focus, offset 100,100 |
-| app_id `steam` | ignore fullscreen at map: satellite fullscreens X windows that map at an output's size, and Steam reopens at the size it was tiled to |
+| app_id `steam` | on `DP-1`; ignore fullscreen at map: satellite fullscreens X windows that map at an output's size, and Steam reopens at the size it was tiled to |
+| app_id `vesktop` | on `DP-1` |
+| app_id `helium` | on `DP-3` |
 | app_id `steam_app_[0-9]+`, `valheim.x86_64`, `cs2`, `gamescope` | **game** (6.8) |
 | title `Minecraft\*? [0-9.]+( - .*)?` (mango has `Minecraft\*? .*`, which also catches browser tabs) | **game** + fullscreen |
 | game app_ids above **with a non-empty title** | fullscreen; untitled ones ignore fullscreen at map |
