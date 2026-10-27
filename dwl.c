@@ -303,6 +303,7 @@ typedef struct {
 	int nomapfs;         /* ignore fullscreen requested before mapping */
 	int isgame;          /* DESIGN.md 6.8 */
 	int isfullscreen;
+	int startup;         /* only matches for startup_secs after mywm starts */
 } Rule;
 
 typedef struct {
@@ -508,6 +509,7 @@ static pid_t child_pid = -1;
 static pid_t satellite_pid = -1;
 static int satellite_pidfd = -1, satellite_backoff = 1;
 static struct timespec satellite_started;
+static struct timespec started;
 static struct wl_event_source *satellite_timer, *satellite_exit;
 static struct wl_event_source *hidden_timer;
 static int hidden_armed;
@@ -3695,6 +3697,11 @@ resizetiled(int dx, int dy)
 int
 rulematches(Client *c, const Rule *r)
 {
+	struct timespec now;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	if (r->startup && now.tv_sec - started.tv_sec > startup_secs)
+		return 0;
 	return rulematchre(c, ruleregex[r - rules], r->id, r->title);
 }
 
@@ -3724,6 +3731,7 @@ run(char *startup_cmd)
 	/* X clients spawned from here on, startup command included, get DISPLAY */
 	startsatellite();
 
+	clock_gettime(CLOCK_MONOTONIC, &started);
 	/* A session exists only on real hardware (DRM and libinput) */
 	for (i = 0; session && i < LENGTH(autostart); i++)
 		spawn(&(Arg){.v = (const char *[]){ "/bin/sh", "-c", autostart[i], NULL }});

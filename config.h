@@ -54,6 +54,8 @@ static const char *const autostart[] = {
 	"helium",
 };
 
+static const int startup_secs = 90; /* how long .startup rules match after login */
+
 /* Regexes (POSIX extended) on app_id and title, from mango's window rules */
 #ifndef GAMEMON
 #define GAMEMON "DP-3" /* the gaming monitor (DESIGN.md 5) */
@@ -69,9 +71,10 @@ static const Rule rules[] = {
 	{ .id = "^(dev\\.duxlabs\\.shell|com\\.danklinux\\.dms)$", .isfloating = 1 },
 	{ .id = "^steam$", .title = "^notificationtoasts_[0-9]+_desktop$",
 	  .isfloating = 1, .nofocus = 1, .offx = 100, .offy = 100 },
-	{ .id = "^steam$", .nomapfs = 1, .monitor = SIDEMON },
-	{ .id = "^[Vv]esktop$", .monitor = SIDEMON },
-	{ .id = "^([Hh]elium|helium-browser)$", .monitor = GAMEMON },
+	{ .id = "^steam$", .nomapfs = 1 },
+	/* Where the autostarted apps open; later windows go to the focused monitor */
+	{ .id = "^(steam|[Vv]esktop)$", .monitor = SIDEMON, .startup = 1 },
+	{ .id = "^([Hh]elium|helium-browser)$", .monitor = GAMEMON, .startup = 1 },
 	/* Games (DESIGN.md 6.8). Proton maps an untitled splash first, and
 	 * fullscreening that breaks mouse capture, so wait for a title. */
 	{ .id = GAMEIDS, .isgame = 1, .monitor = GAMEMON, .nomapfs = 1 },
