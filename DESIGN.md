@@ -198,6 +198,7 @@ Everything here is provided by wlroots 0.20 unless marked **(ours)**.
 | linux-dmabuf, **linux-drm-syncobj-v1** | Explicit sync; required for smooth Vulkan/Proton on modern Mesa |
 | **tearing-control-v1** | Async flips for games |
 | presentation-time | Frame pacing for games and video |
+| **fifo-v1** (own, `fifo.h`; wlroots 0.20 has none) | Vsync pacing; SDL3 only picks native Wayland over XWayland when it exists |
 | content-type-v1 | Games can tag themselves |
 | **drm-lease-v1** | VR headsets |
 | pointer-constraints-v1, relative-pointer-v1 | Mouse look in games |

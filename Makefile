@@ -17,9 +17,9 @@ DWLCFLAGS = `$(PKG_CONFIG) --cflags $(PKGS)` $(WLR_INCS) $(DWLCPPFLAGS) $(DWLDEV
 LDLIBS    = `$(PKG_CONFIG) --libs $(PKGS)` $(WLR_LIBS) -lm $(LIBS)
 
 all: mywm mywmctl
-SRC  = dwl.c nested.c keyboard-shortcuts-inhibit-unstable-v1-protocol.c
-DEPS = $(SRC) client.h config.h ime.h ipc.h mangoipc.h util.h config.mk cursor-shape-v1-protocol.h \
-	ext-image-copy-capture-v1-protocol.h \
+SRC  = dwl.c nested.c keyboard-shortcuts-inhibit-unstable-v1-protocol.c fifo-v1-protocol.c
+DEPS = $(SRC) client.h config.h fifo.h ime.h ipc.h mangoipc.h util.h config.mk cursor-shape-v1-protocol.h \
+	ext-image-copy-capture-v1-protocol.h fifo-v1-protocol.h \
 	keyboard-shortcuts-inhibit-unstable-v1-client-protocol.h \
 	pointer-constraints-unstable-v1-protocol.h wlr-layer-shell-unstable-v1-protocol.h \
 	wlr-output-power-management-unstable-v1-protocol.h xdg-shell-protocol.h
@@ -47,6 +47,12 @@ cursor-shape-v1-protocol.h:
 ext-image-copy-capture-v1-protocol.h:
 	$(WAYLAND_SCANNER) enum-header \
 		$(WAYLAND_PROTOCOLS)/staging/ext-image-copy-capture/ext-image-copy-capture-v1.xml $@
+fifo-v1-protocol.h:
+	$(WAYLAND_SCANNER) server-header \
+		$(WAYLAND_PROTOCOLS)/staging/fifo/fifo-v1.xml $@
+fifo-v1-protocol.c:
+	$(WAYLAND_SCANNER) private-code \
+		$(WAYLAND_PROTOCOLS)/staging/fifo/fifo-v1.xml $@
 pointer-constraints-unstable-v1-protocol.h:
 	$(WAYLAND_SCANNER) enum-header \
 		$(WAYLAND_PROTOCOLS)/unstable/pointer-constraints/pointer-constraints-unstable-v1.xml $@
@@ -72,7 +78,7 @@ clean:
 dist: clean
 	mkdir -p mywm-$(VERSION)
 	cp -R LICENSE* Makefile CHANGELOG.md README.md client.h config.h \
-		config.mk protocols mywm.1 dwl.c nested.c ime.h ipc.h mangoipc.h mywmctl.c util.h mywm.desktop \
+		config.mk protocols mywm.1 dwl.c nested.c fifo.h ime.h ipc.h mangoipc.h mywmctl.c util.h mywm.desktop \
 		mywm-portals.conf mywm-$(VERSION)
 	tar -caf mywm-$(VERSION).tar.gz mywm-$(VERSION)
 	rm -rf mywm-$(VERSION)

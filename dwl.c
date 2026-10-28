@@ -625,6 +625,8 @@ static regex_t scratchregex[LENGTH(scratchpads)][2];
 
 #include "ipc.h"
 
+#include "fifo.h"
+
 /* function implementations */
 void
 animate(Monitor *m)
@@ -3491,13 +3493,13 @@ rendermon(struct wl_listener *listener, void *data)
 	if (!hidden_armed)
 		hiddenframes(NULL);
 	animate(m);
-	if (!wlr_scene_output_needs_frame(m->scene_output)) {
-		return;
+	if (wlr_scene_output_needs_frame(m->scene_output)) {
+		wlr_scene_output_commit(m->scene_output, NULL);
+		clock_gettime(CLOCK_MONOTONIC, &now);
+		wlr_scene_output_send_frame_done(m->scene_output, &now);
 	}
-
-	wlr_scene_output_commit(m->scene_output, NULL);
-	clock_gettime(CLOCK_MONOTONIC, &now);
-	wlr_scene_output_send_frame_done(m->scene_output, &now);
+	/* after the commit, so an update with a barrier is shown for a refresh */
+	fifoframe(m);
 }
 
 void
@@ -4260,6 +4262,7 @@ setup(void)
 	wlr_fractional_scale_manager_v1_create(dpy, 1);
 	wlr_presentation_create(dpy, backend, 2);
 	wlr_alpha_modifier_v1_create(dpy);
+	fifosetup();
 
 	/* Initializes the interface used to implement urgency hints */
 	activation = wlr_xdg_activation_v1_create(dpy);
