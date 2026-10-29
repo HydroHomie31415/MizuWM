@@ -4147,6 +4147,8 @@ setpsel(struct wl_listener *listener, void *data)
 	 * ignore such requests if they so choose, but in dwl we always honor them
 	 */
 	struct wlr_seat_request_set_primary_selection_event *event = data;
+	if (!primary_paste)
+		return;
 	wlr_seat_set_primary_selection(seat, event->source, event->serial);
 }
 
@@ -4256,7 +4258,8 @@ setup(void)
 	wlr_ext_output_image_capture_source_manager_v1_create(dpy, 1);
 	wlr_data_control_manager_v1_create(dpy);
 	wlr_ext_data_control_manager_v1_create(dpy, 1);
-	wlr_primary_selection_v1_device_manager_create(dpy);
+	if (primary_paste)
+		wlr_primary_selection_v1_device_manager_create(dpy);
 	wlr_viewporter_create(dpy);
 	wlr_single_pixel_buffer_manager_v1_create(dpy);
 	wlr_fractional_scale_manager_v1_create(dpy, 1);

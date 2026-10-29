@@ -10,6 +10,7 @@ static const int focusonactivate           = 1;  /* xdg-activation requests take
 static const int bypass_surface_visibility = 0;  /* 1 means idle inhibitors will disable idle tracking even if it's surface isn't visible  */
 static const unsigned int borderpx         = 0;  /* border pixel of windows */
 static const unsigned int snap             = 32; /* snap pixel */
+static const int primary_paste             = 0;  /* 0 drops the primary selection: middle click autoscrolls instead of pasting */
 /* colours from mango's Noctalia theme (~/.config/mango/colors.noctalia.conf) */
 static const float rootcolor[]             = COLOR(0x0b0e14ff);
 static const float bordercolor[]           = COLOR(0x595f6aff);

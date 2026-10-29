@@ -210,7 +210,7 @@ Everything here is provided by wlroots 0.20 unless marked **(ours)**.
 | xdg-activation-v1 | Focus requests (6.5) |
 | xdg-output-v1, output-management-v1, output-power-management-v1 | Output tools, `dpms-off` |
 | text-input-v3, input-method-v2, virtual-keyboard, virtual-pointer | Input tools |
-| primary-selection, data-device | Clipboard |
+| primary-selection (off unless `primary_paste`), data-device | Clipboard |
 | security-context-v1 | Flatpak |
 
 ### 7.2 Needed by Noctalia (checked against `/usr/bin/noctalia` 5.0.0-git)
